@@ -43,7 +43,7 @@ class ModelManager(torch.nn.Module):
             configurations['data']['template_path'])
 
         low_res_templates, down_transforms, up_transforms = \
-            self._precompute_transformations()
+            self._precompute_transformations(show_meshes=False)
         meshes_all_resolutions = [self.template] + low_res_templates
         spirals_indices = self._precompute_spirals(meshes_all_resolutions)
 
@@ -152,7 +152,7 @@ class ModelManager(torch.nn.Module):
     def batch_diagonal_idx(self):
         return self._batch_diagonal_idx
 
-    def _precompute_transformations(self):
+    def _precompute_transformations(self, show_meshes=False):
         storage_path = os.path.join(self._precomputed_storage_path,
                                     'transforms.pkl')
         try:
@@ -173,7 +173,7 @@ class ModelManager(torch.nn.Module):
             down_transforms = []
             up_transforms = []
             for sampling_factor in sampling_params['sampling_factors']:
-                simplifier = MeshSimplifier(in_mesh=m, debug=False)
+                simplifier = MeshSimplifier(in_mesh=m, debug=show_meshes)
                 m, down, up = simplifier(sampling_factor, r_weighted)
                 low_res_templates.append(m)
                 down_transforms.append(down)
