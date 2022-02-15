@@ -1,7 +1,8 @@
 data:
-  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template.ply    # vertices should be coloured (vertex semantic segmentation)
+  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
+  dataset_summary_path: /media/simo/DATASHURPRO/for_simone/dataset_summary.xlsx
   precomputed_path: precomputed_craniofacial
-  dataset_type: faces
+  data_type: heads                                                              # {heads, faces}
   dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes
   normalize_data: True
   to_mm_constant: 156.28255886643                                               # if already in mm set to 1, otherwise set proper multiplicative constant

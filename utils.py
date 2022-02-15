@@ -11,6 +11,7 @@ import numpy as np
 from collections import Counter
 from torch_geometric.data import Data
 from torch_geometric.utils import get_laplacian
+from pandas import read_excel
 
 
 def get_config(config):
@@ -158,4 +159,26 @@ def get_model_list(dirname, key):
     gen_models.sort()
     last_model_name = gen_models[-1]
     return last_model_name
+
+
+def get_dataset_summary(data_config):
+    if 'dataset_summary_path' in data_config:
+        dataset_summary = read_excel(data_config['dataset_summary_path'])
+    else:
+        dataset_summary = None
+    return dataset_summary
+
+
+def find_data_used_from_summary(summary, data_type):
+    if summary is None:
+        return None
+    else:
+        cond_column = "Head Used" if data_type == 'heads' else "Face Used"
+        id_column = 'ID' if data_type == 'heads' else 'PID'
+        ids_to_use = summary.loc[summary[cond_column] == 'y'][id_column]
+        return list(ids_to_use.astype(int).astype(str))
+
+
+def interpolate(x1, x2, value=0.5):
+    return x1 + value * (x2 - x1)
 

@@ -12,6 +12,7 @@ from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Dataset, InMemoryDataset, Data
 
 from swap_batch_transform import SwapFeatures
+from utils import get_dataset_summary, find_data_used_from_summary
 
 
 class DataGenerator:
@@ -92,17 +93,14 @@ def get_data_loaders(config, template=None):
     batch_size = config['optimization']['batch_size']
 
     train_set = MeshInMemoryDataset(
-        data_config['dataset_path'], dataset_type='train',
-        precomputed_storage_path=data_config['precomputed_path'],
-        normalize=data_config['normalize_data'], template=template)
+        data_config['dataset_path'], data_config,
+        dataset_type='train', template=template)
     validation_set = MeshInMemoryDataset(
-        data_config['dataset_path'], dataset_type='val',
-        precomputed_storage_path=data_config['precomputed_path'],
-        normalize=data_config['normalize_data'], template=template)
+        data_config['dataset_path'], data_config,
+        dataset_type='val', template=template)
     test_set = MeshInMemoryDataset(
-        data_config['dataset_path'], dataset_type='test',
-        precomputed_storage_path=data_config['precomputed_path'],
-        normalize=data_config['normalize_data'], template=template)
+        data_config['dataset_path'], data_config,
+        dataset_type='test', template=template)
     normalization_dict = train_set.normalization_dict
 
     swapper = SwapFeatures(template) if data_config['swap_features'] else None
@@ -152,20 +150,23 @@ class MeshCollater:
 
 
 class MeshDataset(Dataset):
-    def __init__(self, root, precomputed_storage_path='precomputed',
-                 dataset_type='train', normalize=True,
+    def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
         self._root = root
-        self._precomputed_storage_path = precomputed_storage_path
-        if not os.path.isdir(precomputed_storage_path):
-            os.mkdir(precomputed_storage_path)
+        self._dataset_summary = get_dataset_summary(data_config)
+        self._data_to_use = find_data_used_from_summary(
+            self._dataset_summary, data_config['data_type'])
+
+        self._precomputed_storage_path = data_config['precomputed_path']
+        if not os.path.isdir(self._precomputed_storage_path):
+            os.mkdir(self._precomputed_storage_path)
 
         self._dataset_type = dataset_type
-        self._normalize = normalize
+        self._normalize = data_config['normalize_data']
         self._template = template
 
         self._train_names, self._test_names, self._val_names = self.split_data(
-            os.path.join(precomputed_storage_path, 'data_split.json'))
+            os.path.join(self._precomputed_storage_path, 'data_split.json'))
 
         self._processed_files = [f + '.pt' for f in self.raw_file_names]
 
@@ -203,7 +204,10 @@ class MeshDataset(Dataset):
         for dirpath, _, fnames in os.walk(self._root):
             for f in fnames:
                 if f.endswith('.ply') or f.endswith('.obj'):
-                    files.append(f)
+                    if self._data_to_use is None:
+                        files.append(f)
+                    elif f[2:-4] in self._data_to_use:
+                        files.append(f)
         return files
 
     def split_data(self, data_split_list_path):
@@ -268,7 +272,7 @@ class MeshDataset(Dataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts)
+            data = Data(x=mesh_verts, y=fname[0])
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
@@ -292,20 +296,23 @@ class MeshDataset(Dataset):
 
 
 class MeshInMemoryDataset(InMemoryDataset):
-    def __init__(self, root, precomputed_storage_path='precomputed',
-                 dataset_type='train', normalize=True,
+    def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
         self._root = root
-        self._precomputed_storage_path = precomputed_storage_path
-        if not os.path.isdir(precomputed_storage_path):
-            os.mkdir(precomputed_storage_path)
+        self._dataset_summary = get_dataset_summary(data_config)
+        self._data_to_use = find_data_used_from_summary(
+            self._dataset_summary, data_config['data_type'])
+
+        self._precomputed_storage_path = data_config['precomputed_path']
+        if not os.path.isdir(self._precomputed_storage_path):
+            os.mkdir(self._precomputed_storage_path)
 
         self._dataset_type = dataset_type
-        self._normalize = normalize
+        self._normalize = data_config['normalize_data']
         self._template = template
 
         self._train_names, self._test_names, self._val_names = self.split_data(
-            os.path.join(precomputed_storage_path, 'data_split.json'))
+            os.path.join(self._precomputed_storage_path, 'data_split.json'))
 
         normalization_dict = self.compute_mean_and_std()
         self._normalization_dict = normalization_dict
@@ -348,7 +355,10 @@ class MeshInMemoryDataset(InMemoryDataset):
         for dirpath, _, fnames in os.walk(self._root):
             for f in fnames:
                 if f.endswith('.ply') or f.endswith('.obj'):
-                    files.append(f)
+                    if self._data_to_use is None:
+                        files.append(f)
+                    elif f[2:-4] in self._data_to_use:
+                        files.append(f)
         return files
 
     def split_data(self, data_split_list_path):
@@ -418,7 +428,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts)
+            data = Data(x=mesh_verts, y=fname[0])
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
