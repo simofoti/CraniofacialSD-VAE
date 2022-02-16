@@ -3,6 +3,7 @@ data:
   dataset_summary_path: /media/simo/DATASHURPRO/for_simone/dataset_summary.xlsx
   precomputed_path: precomputed_craniofacial
   data_type: heads                                                              # {heads, faces}
+  stratified_split: True
   dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes
   normalize_data: True
   to_mm_constant: 156.28255886643                                               # if already in mm set to 1, otherwise set proper multiplicative constant

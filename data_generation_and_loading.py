@@ -10,6 +10,7 @@ import numpy as np
 from abc import abstractmethod
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Dataset, InMemoryDataset, Data
+from sklearn.model_selection import train_test_split
 
 from swap_batch_transform import SwapFeatures
 from utils import get_dataset_summary, find_data_used_from_summary
@@ -161,6 +162,11 @@ class MeshDataset(Dataset):
         if not os.path.isdir(self._precomputed_storage_path):
             os.mkdir(self._precomputed_storage_path)
 
+        if 'stratified_split' in data_config:
+            self._stratified_split = data_config['stratified_split']
+        else:
+            self._stratified_split = False
+
         self._dataset_type = dataset_type
         self._normalize = data_config['normalize_data']
         self._template = template
@@ -221,14 +227,21 @@ class MeshDataset(Dataset):
             all_file_names = self.find_filenames()
             all_file_names.sort()
 
-            train_list, test_list, val_list = [], [], []
-            for i, fname in enumerate(all_file_names):
-                if i % 100 <= 5:
-                    test_list.append(fname)
-                elif i % 100 <= 10:
-                    val_list.append(fname)
-                else:
-                    train_list.append(fname)
+            if self._stratified_split:
+                y = [name[0] for name in all_file_names]
+                train_list, test, _, test_y = train_test_split(
+                    all_file_names, y, stratify=y, test_size=0.2)
+                test_list, val_list, _, _ = train_test_split(
+                    test, test_y, stratify=test_y, test_size=0.5)
+            else:
+                train_list, test_list, val_list = [], [], []
+                for i, fname in enumerate(all_file_names):
+                    if i % 100 <= 5:
+                        test_list.append(fname)
+                    elif i % 100 <= 10:
+                        val_list.append(fname)
+                    else:
+                        train_list.append(fname)
 
             data = {'train': train_list, 'test': test_list, 'val': val_list}
             with open(data_split_list_path, 'w') as fp:
@@ -307,6 +320,11 @@ class MeshInMemoryDataset(InMemoryDataset):
         if not os.path.isdir(self._precomputed_storage_path):
             os.mkdir(self._precomputed_storage_path)
 
+        if 'stratified_split' in data_config:
+            self._stratified_split = data_config['stratified_split']
+        else:
+            self._stratified_split = False
+
         self._dataset_type = dataset_type
         self._normalize = data_config['normalize_data']
         self._template = template
@@ -372,14 +390,21 @@ class MeshInMemoryDataset(InMemoryDataset):
             all_file_names = self.find_filenames()
             all_file_names.sort()
 
-            train_list, test_list, val_list = [], [], []
-            for i, fname in enumerate(all_file_names):
-                if i % 100 <= 5:
-                    test_list.append(fname)
-                elif i % 100 <= 10:
-                    val_list.append(fname)
-                else:
-                    train_list.append(fname)
+            if self._stratified_split:
+                y = [name[0] for name in all_file_names]
+                train_list, test, _, test_y = train_test_split(
+                    all_file_names, y, stratify=y, test_size=0.2)
+                test_list, val_list, _, _ = train_test_split(
+                    test, test_y, stratify=test_y, test_size=0.5)
+            else:
+                train_list, test_list, val_list = [], [], []
+                for i, fname in enumerate(all_file_names):
+                    if i % 100 <= 5:
+                        test_list.append(fname)
+                    elif i % 100 <= 10:
+                        val_list.append(fname)
+                    else:
+                        train_list.append(fname)
 
             data = {'train': train_list, 'test': test_list, 'val': val_list}
             with open(data_split_list_path, 'w') as fp:
