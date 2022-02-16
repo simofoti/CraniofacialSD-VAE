@@ -10,8 +10,9 @@ import networkx as nx
 import numpy as np
 from collections import Counter
 from torch_geometric.data import Data
-from torch_geometric.utils import get_laplacian
+from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix, from_trimesh
 from pandas import read_excel
+from scipy.sparse.linalg import eigsh
 
 
 def get_config(config):
@@ -182,3 +183,20 @@ def find_data_used_from_summary(summary, data_type):
 def interpolate(x1, x2, value=0.5):
     return x1 + value * (x2 - x1)
 
+
+def compute_laplacian_eigendecomposition(template, k=500):
+    lapl = to_scipy_sparse_matrix(
+        *get_laplacian(template.edge_index, normalization=None))
+    return eigsh(lapl, k=k, which='SM')
+
+
+def spectral_combination(x1, x2, eigendec):
+    s, u = eigendec
+    s1 = u.T @ x1
+    s2 = u.T @ x2
+
+    swap_until = 30  # half of them are swapped
+    selector = np.random.choice(swap_until, swap_until // 2, replace=False)
+    s3 = s1.copy()
+    s3[selector] = s2[selector]
+    return u @ s3

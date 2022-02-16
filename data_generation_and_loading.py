@@ -13,7 +13,9 @@ from torch_geometric.data import Dataset, InMemoryDataset, Data
 from sklearn.model_selection import train_test_split
 
 from swap_batch_transform import SwapFeatures
-from utils import get_dataset_summary, find_data_used_from_summary
+from utils import (get_dataset_summary, find_data_used_from_summary,
+                   interpolate, compute_laplacian_eigendecomposition,
+                   spectral_combination)
 
 
 class DataGenerator:
@@ -209,7 +211,7 @@ class MeshDataset(Dataset):
         files = []
         for dirpath, _, fnames in os.walk(self._root):
             for f in fnames:
-                if f.endswith('.ply') or f.endswith('.obj'):
+                if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
                     if self._data_to_use is None:
                         files.append(f)
                     elif f[2:-4] in self._data_to_use:
@@ -337,6 +339,10 @@ class MeshInMemoryDataset(InMemoryDataset):
         self.mean = normalization_dict['mean']
         self.std = normalization_dict['std']
 
+        self._augment(mode=data_config['augmentation_mode'],
+                      aug_factor=data_config['augmentation_factor'],
+                      balanced=data_config['augmentation_balanced'])
+
         super(MeshInMemoryDataset, self).__init__(
             root, transform, pre_transform)
 
@@ -372,7 +378,7 @@ class MeshInMemoryDataset(InMemoryDataset):
         files = []
         for dirpath, _, fnames in os.walk(self._root):
             for f in fnames:
-                if f.endswith('.ply') or f.endswith('.obj'):
+                if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
                     if self._data_to_use is None:
                         files.append(f)
                     elif f[2:-4] in self._data_to_use:
@@ -475,6 +481,61 @@ class MeshInMemoryDataset(InMemoryDataset):
         first_mesh.vertices = self.mean.detach().cpu().numpy()
         first_mesh.export(
             os.path.join(self._precomputed_storage_path, 'mean.ply'))
+
+    def _augment(self, mode='interpolate', aug_factor=10, balanced=True):
+        if mode == 'spectral':
+            eigd = compute_laplacian_eigendecomposition(self._template, k=1000)
+        else:
+            eigd = None
+
+        initial_list = self._train_names
+        data_classes = set([name[0] for name in initial_list])
+        paths_per_class = {cl: [] for cl in data_classes}
+        for name in initial_list:
+            paths_per_class[name[0]].append(name)
+
+        augmented_dir = os.path.join(self._root, 'augmented')
+        if os.path.isdir(augmented_dir) and os.listdir(augmented_dir):
+            aug_names = os.listdir(augmented_dir)
+            n_aug_per_class = {cl: 0 for cl in set([n[0] for n in aug_names])}
+            for name in aug_names:
+                if name.endswith('.obj') or name.endswith('.ply'):
+                    self._train_names.append(os.path.join('augmented', name))
+                    n_aug_per_class[name[0]] += 1
+            print(f"Found data previously augmented. Using {n_aug_per_class}")
+        else:
+            if not os.path.isdir(augmented_dir):
+                os.mkdir(augmented_dir)
+            for c, names in paths_per_class.items():
+                if balanced:
+                    n_aug_data = aug_factor * len(initial_list)
+                    target_per_class = n_aug_data // len(data_classes)
+                    n_aug_this_class = target_per_class - len(names)
+                else:
+                    n_aug_this_class = (aug_factor - 1) * len(names)
+
+                for i in range(n_aug_this_class):
+                    selector = np.random.choice(len(names), 2, replace=False)
+                    name1, name2 = names[selector[0]], names[selector[1]]
+                    path1 = os.path.join(self._root, name1)
+                    path2 = os.path.join(self._root, name2)
+                    mesh1 = trimesh.load_mesh(path1, process=False)
+                    mesh2 = trimesh.load_mesh(path2, process=False)
+                    x1 = np.array(mesh1.vertices)
+                    x2 = np.array(mesh2.vertices)
+                    if mode == 'spectral':
+                        aug = '_spectral' + str(i)
+                        x_aug = spectral_combination(x1, x2, eigd)
+                    else:
+                        interpolation_value = np.random.uniform(size=1).item()
+                        aug = '_interp' + f'{interpolation_value:.2f}'
+                        x_aug = interpolate(x1, x2, interpolation_value)
+                    mesh1.vertices = x_aug
+
+                    aug_name = name1[:-4] + '_' + name2[2:-4] + aug + name1[-4:]
+                    mesh1.export(os.path.join(augmented_dir, aug_name))
+                    self._train_names.append(
+                        os.path.join('augmented', aug_name))
 
 
 if __name__ == '__main__':
