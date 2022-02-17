@@ -16,17 +16,22 @@ class SwapFeatures:
                                 device=batched_data.x.device,
                                 dtype=batched_data.x.dtype)
         new_y = [None] * (batch_size ** 2)
+        new_aug = torch.ones([batch_size ** 2, 1],
+                             device=batched_data.augmented.device,
+                             dtype=batched_data.augmented.dtype)
         key = random.choice(self._zones_keys)
         for j in range(batch_size):
             for i in range(batch_size):
                 if i == j:
                     new_batch[i * batch_size + j, ::] = batched_data.x[i, ::]
                     new_y[i * batch_size + j] = batched_data.y[i]
+                    new_aug[i * batch_size + j] = batched_data.augmented[i]
                 else:
                     vertices = batched_data.x.numpy()
                     new_batch[i * batch_size + j, ::] = self.swap(
                         vertices[i, ::], vertices[j, ::], key)
-        batched_data = Data(x=new_batch, y=new_y, swapped=key)
+        batched_data = Data(x=new_batch, y=new_y,
+                            swapped=key, augmented=new_aug)
         return batched_data
 
     def swap(self, verts0, verts1, feature_key):
@@ -38,4 +43,3 @@ class SwapFeatures:
         feature_verts1 = verts1[feature_idxs]
         verts0[feature_idxs] = feature_verts1
         return torch.tensor(verts0)
-

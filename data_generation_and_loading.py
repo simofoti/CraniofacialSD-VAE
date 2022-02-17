@@ -287,7 +287,7 @@ class MeshDataset(Dataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts, y=fname[0])
+            data = Data(x=mesh_verts, y=fname[0], augmented=('aug' in fname))
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
@@ -371,6 +371,10 @@ class MeshInMemoryDataset(InMemoryDataset):
     @property
     def normalization_dict(self):
         return self._normalization_dict
+
+    @property
+    def data_classes(self):
+        return set([name[0] for name in self._train_names])
 
     def download(self):
         pass
@@ -460,7 +464,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts, y=fname[0])
+            data = Data(x=mesh_verts, y=fname[0], augmented=('aug' in fname))
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
