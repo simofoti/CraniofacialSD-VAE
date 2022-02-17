@@ -339,9 +339,10 @@ class MeshInMemoryDataset(InMemoryDataset):
         self.mean = normalization_dict['mean']
         self.std = normalization_dict['std']
 
-        self._augment(mode=data_config['augmentation_mode'],
-                      aug_factor=data_config['augmentation_factor'],
-                      balanced=data_config['augmentation_balanced'])
+        if dataset_type == 'train':
+            self._augment(mode=data_config['augmentation_mode'],
+                          aug_factor=data_config['augmentation_factor'],
+                          balanced=data_config['augmentation_balanced'])
 
         super(MeshInMemoryDataset, self).__init__(
             root, transform, pre_transform)
@@ -483,17 +484,6 @@ class MeshInMemoryDataset(InMemoryDataset):
             os.path.join(self._precomputed_storage_path, 'mean.ply'))
 
     def _augment(self, mode='interpolate', aug_factor=10, balanced=True):
-        if mode == 'spectral':
-            eigd = compute_laplacian_eigendecomposition(self._template, k=1000)
-        else:
-            eigd = None
-
-        initial_list = self._train_names
-        data_classes = set([name[0] for name in initial_list])
-        paths_per_class = {cl: [] for cl in data_classes}
-        for name in initial_list:
-            paths_per_class[name[0]].append(name)
-
         augmented_dir = os.path.join(self._root, 'augmented')
         if os.path.isdir(augmented_dir) and os.listdir(augmented_dir):
             aug_names = os.listdir(augmented_dir)
@@ -504,8 +494,21 @@ class MeshInMemoryDataset(InMemoryDataset):
                     n_aug_per_class[name[0]] += 1
             print(f"Found data previously augmented. Using {n_aug_per_class}")
         else:
+            if mode == 'spectral':
+                eigd = compute_laplacian_eigendecomposition(
+                    self._template, k=1000)
+            else:
+                eigd = None
+
+            initial_list = self._train_names
+            data_classes = set([name[0] for name in initial_list])
+            paths_per_class = {cl: [] for cl in data_classes}
+            for name in initial_list:
+                paths_per_class[name[0]].append(name)
+
             if not os.path.isdir(augmented_dir):
                 os.mkdir(augmented_dir)
+
             for c, names in paths_per_class.items():
                 if balanced:
                     n_aug_data = aug_factor * len(initial_list)

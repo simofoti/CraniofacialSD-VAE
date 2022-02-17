@@ -195,8 +195,8 @@ def spectral_combination(x1, x2, eigendec):
     s1 = u.T @ x1
     s2 = u.T @ x2
 
-    swap_until = 30  # half of them are swapped
-    selector = np.random.choice(swap_until, swap_until // 2, replace=False)
+    swap_until = 30  # one third of them are swapped    vvv
+    selector = np.random.choice(swap_until, swap_until // 3, replace=False)
     s3 = s1.copy()
     s3[selector] = s2[selector]
     return u @ s3
