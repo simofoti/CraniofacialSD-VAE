@@ -200,3 +200,17 @@ def spectral_combination(x1, x2, eigendec):
     s3 = s1.copy()
     s3[selector] = s2[selector]
     return u @ s3
+
+
+def spectral_interpolation(x1, x2, eigendec):
+    s, u = eigendec
+    s1 = u.T @ x1
+    s2 = u.T @ x2
+
+    values = np.random.uniform(size=[s1.shape[0], 1])
+    s3 = s1 + values * (s2 - s1)
+
+    interp_until = 30
+    s4 = s1.copy()
+    s4[:interp_until] = s3[:interp_until]
+    return u @ s4

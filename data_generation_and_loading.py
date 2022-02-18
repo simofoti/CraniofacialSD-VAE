@@ -15,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from swap_batch_transform import SwapFeatures
 from utils import (get_dataset_summary, find_data_used_from_summary,
                    interpolate, compute_laplacian_eigendecomposition,
-                   spectral_combination)
+                   spectral_combination, spectral_interpolation)
 
 
 class DataGenerator:
@@ -498,7 +498,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                     n_aug_per_class[name[0]] += 1
             print(f"Found data previously augmented. Using {n_aug_per_class}")
         else:
-            if mode == 'spectral':
+            if mode == 'spectral_comb' or mode == 'spectral_interp':
                 eigd = compute_laplacian_eigendecomposition(
                     self._template, k=1000)
             else:
@@ -530,9 +530,12 @@ class MeshInMemoryDataset(InMemoryDataset):
                     mesh2 = trimesh.load_mesh(path2, process=False)
                     x1 = np.array(mesh1.vertices)
                     x2 = np.array(mesh2.vertices)
-                    if mode == 'spectral':
-                        aug = '_spectral' + str(i)
+                    if mode == 'spectral_comb':
+                        aug = '_spectral_comb' + str(i)
                         x_aug = spectral_combination(x1, x2, eigd)
+                    elif mode == 'spectral_interp':
+                        aug = '_spectral_interp' + str(i)
+                        x_aug = spectral_interpolation(x1, x2, eigd)
                     else:
                         interpolation_value = np.random.uniform(size=1).item()
                         aug = '_interp' + f'{interpolation_value:.2f}'

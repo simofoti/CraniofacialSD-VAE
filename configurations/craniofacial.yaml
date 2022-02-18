@@ -5,7 +5,7 @@ data:
   data_type: heads                                                              # {heads, faces}
   stratified_split: True
   dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes
-  augmentation_mode: spectral                                                   # {interpolate, spectral}
+  augmentation_mode: spectral_interp                                            # {interpolate, spectral_interp, spectral_comb}
   augmentation_factor: 10
   augmentation_balanced: True                                                   # if True, total meshes are the same across classes. If False, meshes of each class are augmented by augmentation_factor
   normalize_data: True
