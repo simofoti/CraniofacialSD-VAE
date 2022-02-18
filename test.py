@@ -96,6 +96,8 @@ class Tester:
         except FileNotFoundError:
             latents_list = []
             for data in tqdm.tqdm(data_loader):
+                if self._config['data']['swap_features']:
+                    data.x = data.x[self._manager.batch_diagonal_idx, ::]
                 latents_list.append(self._manager.encode(
                     data.x.to(self._device)).detach().cpu())
             latents = torch.cat(latents_list, dim=0)
