@@ -180,6 +180,14 @@ def find_data_used_from_summary(summary, data_type):
         return list(ids_to_use.astype(int).astype(str))
 
 
+def get_age_and_gender_from_summary(summary, mesh_id, data_type):
+    id_column_name = 'ID' if data_type == 'heads' else 'PID'
+    id_column = summary[id_column_name].fillna(-1).astype(int).astype(str)
+    age = summary.loc[id_column == mesh_id]['AgeMonths']
+    gender = summary.loc[id_column == mesh_id]['Gender']
+    return age.values[0], gender.values[0]
+
+
 def interpolate(x1, x2, value=0.5):
     return x1 + value * (x2 - x1)
 

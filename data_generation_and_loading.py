@@ -13,8 +13,9 @@ from torch_geometric.data import Dataset, InMemoryDataset, Data
 from sklearn.model_selection import train_test_split
 
 from swap_batch_transform import SwapFeatures
-from utils import (get_dataset_summary, find_data_used_from_summary,
-                   interpolate, compute_laplacian_eigendecomposition,
+from utils import (get_dataset_summary, get_age_and_gender_from_summary,
+                   find_data_used_from_summary, interpolate,
+                   compute_laplacian_eigendecomposition,
                    spectral_combination, spectral_interpolation)
 
 
@@ -314,9 +315,10 @@ class MeshInMemoryDataset(InMemoryDataset):
     def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
         self._root = root
+        self._data_type = data_config['data_type']
         self._dataset_summary = get_dataset_summary(data_config)
         self._data_to_use = find_data_used_from_summary(
-            self._dataset_summary, data_config['data_type'])
+            self._dataset_summary, self._data_type)
 
         self._precomputed_storage_path = data_config['precomputed_path']
         if not os.path.isdir(self._precomputed_storage_path):
@@ -499,6 +501,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             print(f"Found data previously augmented. Using {n_aug_per_class}")
         else:
             if mode == 'spectral_comb' or mode == 'spectral_interp':
+                self._spectral_projections_analysis(k=30)
                 eigd = compute_laplacian_eigendecomposition(
                     self._template, k=1000)
             else:
@@ -546,6 +549,61 @@ class MeshInMemoryDataset(InMemoryDataset):
                     mesh1.export(os.path.join(augmented_dir, aug_name))
                     self._train_names.append(
                         os.path.join('augmented', aug_name))
+
+    def _spectral_projections_analysis(self, k=200):
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import Normalize
+        from matplotlib.cm import get_cmap
+
+        # normalize colors considering that maximum age is 20y (240m)
+        # also 0m would be white, use negative ages to shift colours
+        normalize_color = Normalize(vmin=-60.0, vmax=240.0)
+        cmap_blue = get_cmap('Blues')
+        cmap_red = get_cmap('Reds')
+
+        s, u = compute_laplacian_eigendecomposition(self._template, k=k)
+        spectral_proj_template = u.T @ self._template.pos.detach().cpu().numpy()
+        data_classes = set([name[0] for name in self._train_names])
+
+        fig, axs = plt.subplots(len(data_classes), 3, figsize=(10, 10))
+
+        for c_i, c in enumerate(data_classes):
+            for name in self._train_names:
+                if name[0] == c:
+                    path = os.path.join(self._root, name)
+                    age, gender = get_age_and_gender_from_summary(
+                        self._dataset_summary, name[2:-4], self._data_type)
+
+                    mesh = trimesh.load_mesh(path, process=False)
+                    spectral_proj = u.T @ np.array(mesh.vertices)
+                    spectral_proj -= spectral_proj_template
+
+                    x = np.arange(1, k + 1)
+                    if gender == 'M':
+                        line_colour = list(cmap_blue(normalize_color(age)))
+                    else:
+                        line_colour = list(cmap_red(normalize_color(age)))
+                    line_colour[-1] = 0.7
+
+                    axs[c_i, 0].set_title(f"{c}_s1")
+                    axs[c_i, 0].plot(x, spectral_proj[:, 0],
+                                     color=line_colour, linewidth=0.5)
+                    axs[c_i, 1].set_title(f"{c}_s2")
+                    axs[c_i, 1].plot(x, spectral_proj[:, 1],
+                                     color=line_colour, linewidth=0.5)
+                    axs[c_i, 2].set_title(f"{c}_s3")
+                    axs[c_i, 2].plot(x, spectral_proj[:, 2],
+                                     color=line_colour, linewidth=0.5)
+                    # axs[c_i, 3].set_title(f"{c}_module")
+                    # axs[c_i, 3].plot(x, np.linalg.norm(spectral_proj, 2, 1),
+                    #                  color=line_colour, linewidth=0.5)
+
+        for ax in axs.flat:
+            ax.set(xlabel='spectral components', ylabel='value')
+        for ax in axs.flat:
+            ax.label_outer()
+        plt.savefig(os.path.join(self._root, "processed",
+                                 "spectral_proj_analysis.svg"))
 
 
 if __name__ == '__main__':
