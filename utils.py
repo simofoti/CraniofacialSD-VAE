@@ -10,9 +10,10 @@ import networkx as nx
 import numpy as np
 from collections import Counter
 from torch_geometric.data import Data
-from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix, from_trimesh
+from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix
 from pandas import read_excel
 from scipy.sparse.linalg import eigsh
+from matplotlib.colors import Normalize
 
 
 def get_config(config):

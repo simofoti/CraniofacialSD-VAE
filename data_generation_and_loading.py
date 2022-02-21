@@ -466,7 +466,12 @@ class MeshInMemoryDataset(InMemoryDataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts, y=fname[0], augmented=('aug' in fname))
+            age, gender = get_age_and_gender_from_summary(
+                self._dataset_summary, fname[2:-4], self._data_type)
+
+            data = Data(x=mesh_verts, y=fname[0],
+                        augmented=('aug' in fname),
+                        age=age, gender=gender)
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
