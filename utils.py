@@ -222,3 +222,10 @@ def spectral_interpolation(x1, x2, eigendec):
     s4 = s1.copy()
     s4[:interp_until] = s3[:interp_until]
     return u @ s4
+
+
+def get_per_vertex_eigenvector_color(eigenvec_matrix, eigenvec_n):
+    cmap = matplotlib.cm.get_cmap("bwr")
+    e_vec = eigenvec_matrix[:, eigenvec_n]
+    colors = cmap(Normalize(vmin=e_vec.min(), vmax=e_vec.max())(e_vec))
+    return colors
