@@ -550,7 +550,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                     self._train_names.append(
                         os.path.join('augmented', aug_name))
 
-    def _spectral_projections_analysis(self, k=200):
+    def _spectral_projections_analysis(self, k=200, plot_type='scatter'):
         import matplotlib.pyplot as plt
         from matplotlib.colors import Normalize
         from matplotlib.cm import get_cmap
@@ -585,18 +585,29 @@ class MeshInMemoryDataset(InMemoryDataset):
                         line_colour = list(cmap_red(normalize_color(age)))
                     line_colour[-1] = 0.7
 
-                    axs[c_i, 0].set_title(f"{c}_s1")
-                    axs[c_i, 0].plot(x, spectral_proj[:, 0],
-                                     color=line_colour, linewidth=0.5)
-                    axs[c_i, 1].set_title(f"{c}_s2")
-                    axs[c_i, 1].plot(x, spectral_proj[:, 1],
-                                     color=line_colour, linewidth=0.5)
-                    axs[c_i, 2].set_title(f"{c}_s3")
-                    axs[c_i, 2].plot(x, spectral_proj[:, 2],
-                                     color=line_colour, linewidth=0.5)
-                    # axs[c_i, 3].set_title(f"{c}_module")
-                    # axs[c_i, 3].plot(x, np.linalg.norm(spectral_proj, 2, 1),
-                    #                  color=line_colour, linewidth=0.5)
+                    # line_colour = 'b' if gender == 'M' else 'r'
+                    # line_colour = 'darkslategrey' if age > 12 * 3 else 'coral'
+
+                    if plot_type == 'line':
+                        axs[c_i, 0].set_title(f"{c}_s1")
+                        axs[c_i, 0].plot(x, spectral_proj[:, 0],
+                                         color=line_colour, linewidth=0.5)
+                        axs[c_i, 1].set_title(f"{c}_s2")
+                        axs[c_i, 1].plot(x, spectral_proj[:, 1],
+                                         color=line_colour, linewidth=0.5)
+                        axs[c_i, 2].set_title(f"{c}_s3")
+                        axs[c_i, 2].plot(x, spectral_proj[:, 2],
+                                         color=line_colour, linewidth=0.5)
+                    else:
+                        axs[c_i, 0].set_title(f"{c}_s1")
+                        axs[c_i, 0].scatter(x, spectral_proj[:, 0], s=5,
+                                            color=line_colour, linewidth=0.5)
+                        axs[c_i, 1].set_title(f"{c}_s2")
+                        axs[c_i, 1].scatter(x, spectral_proj[:, 1], s=5,
+                                            color=line_colour, linewidth=0.5)
+                        axs[c_i, 2].set_title(f"{c}_s3")
+                        axs[c_i, 2].scatter(x, spectral_proj[:, 2], s=5,
+                                            color=line_colour, linewidth=0.5)
 
         for ax in axs.flat:
             ax.set(xlabel='spectral components', ylabel='value')
