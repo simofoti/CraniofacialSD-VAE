@@ -1,11 +1,13 @@
 import json
 import os
+import random
 import pickle
 import tqdm
 import trimesh
 import torch
 
 import numpy as np
+import pandas as pd
 
 from abc import abstractmethod
 from torch.utils.data.dataloader import default_collate
@@ -494,7 +496,8 @@ class MeshInMemoryDataset(InMemoryDataset):
         first_mesh.export(
             os.path.join(self._precomputed_storage_path, 'mean.ply'))
 
-    def _augment(self, mode='interpolate', aug_factor=10, balanced=True):
+    def _augment(self, mode='interpolate', aug_factor=10, balanced=True,
+                 split_3years=True):
         augmented_dir = os.path.join(self._root, 'augmented')
         if os.path.isdir(augmented_dir) and os.listdir(augmented_dir):
             aug_names = os.listdir(augmented_dir)
@@ -514,30 +517,46 @@ class MeshInMemoryDataset(InMemoryDataset):
 
             initial_list = self._train_names
             data_classes = set([name[0] for name in initial_list])
-            paths_per_class = {cl: [] for cl in data_classes}
+            paths_age_gender_per_class = {cl: [] for cl in data_classes}
             for name in initial_list:
-                paths_per_class[name[0]].append(name)
+                age, gender = get_age_and_gender_from_summary(
+                    self._dataset_summary, name[2:-4], self._data_type)
+                info = {'name': name, 'gender': gender, 'age': age}
+                paths_age_gender_per_class[name[0]].append(info)
 
             if not os.path.isdir(augmented_dir):
                 os.mkdir(augmented_dir)
 
-            for c, names in paths_per_class.items():
+            for c, info in paths_age_gender_per_class.items():
                 if balanced:
                     n_aug_data = aug_factor * len(initial_list)
                     target_per_class = n_aug_data // len(data_classes)
-                    n_aug_this_class = target_per_class - len(names)
+                    n_aug_this_class = target_per_class - len(info)
                 else:
-                    n_aug_this_class = (aug_factor - 1) * len(names)
+                    n_aug_this_class = (aug_factor - 1) * len(info)
+
+                info_df = pd.DataFrame(info).convert_dtypes()
+                # NB: kids are 3 years old until their birthday (so 48 is used)
+                less_3y = info_df.loc[info_df['age'] < 48].to_dict('records')
+                more_3y = info_df.loc[info_df['age'] >= 48].to_dict('records')
 
                 for i in range(n_aug_this_class):
-                    selector = np.random.choice(len(names), 2, replace=False)
-                    name1, name2 = names[selector[0]], names[selector[1]]
+                    if split_3years:
+                        age_group_info = random.choice([less_3y, more_3y])
+                    else:
+                        age_group_info = info
+
+                    selector = np.random.choice(len(age_group_info), 2,
+                                                replace=False)
+                    name1 = age_group_info[selector[0]]['name']
+                    name2 = age_group_info[selector[1]]['name']
                     path1 = os.path.join(self._root, name1)
                     path2 = os.path.join(self._root, name2)
                     mesh1 = trimesh.load_mesh(path1, process=False)
                     mesh2 = trimesh.load_mesh(path2, process=False)
                     x1 = np.array(mesh1.vertices)
                     x2 = np.array(mesh2.vertices)
+
                     if mode == 'spectral_comb':
                         aug = '_spectral_comb' + str(i)
                         x_aug = spectral_combination(x1, x2, eigd)
