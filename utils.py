@@ -182,11 +182,14 @@ def find_data_used_from_summary(summary, data_type):
 
 
 def get_age_and_gender_from_summary(summary, mesh_id, data_type):
-    id_column_name = 'ID' if data_type == 'heads' else 'PID'
-    id_column = summary[id_column_name].fillna(-1).astype(int).astype(str)
-    age = summary.loc[id_column == mesh_id]['AgeMonths']
-    gender = summary.loc[id_column == mesh_id]['Gender']
-    return age.values[0], gender.values[0]
+    try:
+        id_column_name = 'ID' if data_type == 'heads' else 'PID'
+        id_column = summary[id_column_name].fillna(-1).astype(int).astype(str)
+        age = summary.loc[id_column == mesh_id]['AgeMonths'].values[0]
+        gender = summary.loc[id_column == mesh_id]['Gender'].values[0]
+    except IndexError:  # should be triggered by augmented meshes
+        age, gender = -1, 'n/a'
+    return age, gender
 
 
 def interpolate(x1, x2, value=0.5):

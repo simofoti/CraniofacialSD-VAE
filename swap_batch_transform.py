@@ -19,6 +19,10 @@ class SwapFeatures:
         new_aug = torch.ones([batch_size ** 2, 1],
                              device=batched_data.augmented.device,
                              dtype=batched_data.augmented.dtype)
+        new_gender = ['n/a'] * (batch_size ** 2)
+        new_age = - torch.ones([batch_size ** 2, 1],
+                               device=batched_data.age.device,
+                               dtype=batched_data.age.dtype)
         key = random.choice(self._zones_keys)
         for j in range(batch_size):
             for i in range(batch_size):
@@ -26,12 +30,15 @@ class SwapFeatures:
                     new_batch[i * batch_size + j, ::] = batched_data.x[i, ::]
                     new_y[i * batch_size + j] = batched_data.y[i]
                     new_aug[i * batch_size + j] = batched_data.augmented[i]
+                    new_gender[i * batch_size + j] = batched_data.gender[i]
+                    new_age[i * batch_size + j] = batched_data.age[i]
                 else:
                     vertices = batched_data.x.numpy()
                     new_batch[i * batch_size + j, ::] = self.swap(
                         vertices[i, ::], vertices[j, ::], key)
         batched_data = Data(x=new_batch, y=new_y,
-                            swapped=key, augmented=new_aug)
+                            swapped=key, augmented=new_aug,
+                            age=new_age, gender=new_gender)
         return batched_data
 
     def swap(self, verts0, verts1, feature_key):
