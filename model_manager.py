@@ -6,7 +6,7 @@ import tqdm
 
 import numpy as np
 
-from sklearn import mixture, svm, metrics
+from sklearn import mixture, svm, discriminant_analysis
 from torch.nn.functional import cross_entropy
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
@@ -132,27 +132,35 @@ class ModelManager(torch.nn.Module):
 
         if 'classifier' in configurations:
             self._classifier_params = configurations['classifier']
+
+            if self._classifier_params['mlp_training_type'] == 'end2end':
+                self._mlp_classifier_end2end = True
+                self._w_classifier_loss = \
+                    self._classifier_params['mlp_loss_weight']
+            else:
+                self._mlp_classifier_end2end = False
+                self._w_classifier_loss = 0
+
             fnames = os.listdir(configurations['data']['dataset_path'])
             n_classes = len(set([n[0] for n in fnames if n.endswith('.obj')]))
             self._class2idx_dict = None
             self._class_weights = None
 
-            if self._classifier_params['model_type'] == 'mlp':
-                self._classifier = MLPClassifier(
-                    self._model_params['latent_size'],
-                    self._classifier_params['mlp_hidden_features'],
-                    n_classes).to(device)
-                self._classifier_optimizer = torch.optim.Adam(
-                    self._classifier.parameters(),
-                    lr=float(self._classifier_params['lr']),
-                    weight_decay=self._optimization_params['weight_decay'])
-                self._w_classifier_loss = self._classifier_params['loss_weight']
-            elif self._classifier_params['model_type'] == 'svm':
-                self._w_classifier_loss = 0
-                self._classifier = svm.LinearSVC(class_weight='balanced')
-            else:
-                self._w_classifier_loss = 0
-                self._classifier = None
+            self._main_classifier = None
+            self._classifier_mlp = MLPClassifier(
+                self._model_params['latent_size'],
+                self._classifier_params['mlp_hidden_features'],
+                n_classes).to(device)
+            self._classifier_optimizer = torch.optim.Adam(
+                self._classifier_mlp.parameters(),
+                lr=float(self._classifier_params['mlp_lr']),
+                weight_decay=self._optimization_params['weight_decay'])
+
+            self._classifier_svm = svm.LinearSVC(class_weight='balanced')
+            self._lda = discriminant_analysis.LinearDiscriminantAnalysis(
+                n_components=2)  # dimension for dimensionality reduction
+        else:
+            self._classifier_params = None
 
         # If latents are used for other purposes avoids embedding all training
         # samples multiple times
@@ -176,13 +184,6 @@ class ModelManager(torch.nn.Module):
     @property
     def is_rae(self):
         return self._w_rae_loss > 0
-
-    @property
-    def separately_train_classifier(self):
-        model_type = self._classifier_params['model_type']
-        training_type = self._classifier_params['training_type']
-        separate_mlp = model_type == 'mlp' and training_type == 'after'
-        return model_type == 'svm' or separate_mlp
 
     @property
     def model_latent_size(self):
@@ -303,7 +304,7 @@ class ModelManager(torch.nn.Module):
             self._optimizer.zero_grad()
             if self._w_rae_loss > 0:
                 self._rae_gen_optimizer.zero_grad()
-            if self._classifier and not self.separately_train_classifier:
+            if self._classifier_params and self._mlp_classifier_end2end:
                 self._classifier_optimizer.zero_grad()
 
         data = data.to(device)
@@ -331,13 +332,13 @@ class ModelManager(torch.nn.Module):
         else:
             loss_z_cons = torch.tensor(0, device=device)
 
-        if self._classifier and not self.separately_train_classifier:
+        if self._classifier_params and self._mlp_classifier_end2end:
             if self._swap_features:
                 z = z[self._batch_diagonal_idx, ::]
                 y_gt = list(np.array(data.y)[self._batch_diagonal_idx])
             else:
                 y_gt = data.y
-            y_pred, y_pred_label = self._classifier(z)
+            y_pred, y_pred_label = self._classifier_mlp(z)
             loss_class, acc_class = self.compute_classification_loss_and_acc(
                 y_pred, y_pred_label, y_gt)
         else:
@@ -357,7 +358,7 @@ class ModelManager(torch.nn.Module):
             self._optimizer.step()
             if self._w_rae_loss > 0:
                 self._rae_gen_optimizer.step()
-            if self._classifier and not self.separately_train_classifier:
+            if self._classifier_params and self._mlp_classifier_end2end:
                 self._classifier_optimizer.step()
 
         return {'reconstruction': loss_recon.item(),
@@ -607,7 +608,7 @@ class ModelManager(torch.nn.Module):
             if train:
                 self._classifier_optimizer.zero_grad()
 
-            y_pred, y_pred_label = self._classifier(z.to(self.device))
+            y_pred, y_pred_label = self._classifier_mlp(z.to(self.device))
             loss_class, acc_class = self.compute_classification_loss_and_acc(
                 y_pred, y_pred_label, label)
 
@@ -619,15 +620,18 @@ class ModelManager(torch.nn.Module):
             epoch_acc += acc_class.item()
         return epoch_loss / len(latents_list), epoch_acc / len(latents_list)
 
-    def train_and_validate_classifier(self, train_loader, validation_loader,
-                                      writer, checkpoint_dir):
+    def train_and_validate_classifiers(self, train_loader, validation_loader,
+                                       writer, checkpoint_dir):
         if self._train_latents_list is None:
             self.encode_all(train_loader, is_train_loader=True)
         val_latents_list, val_l_list = self.encode_all(validation_loader, False)
 
-        print("Training classifier")
-        if self._classifier_params['model_type'] == 'mlp':
-            for epoch in tqdm.tqdm(range(self._classifier_params['epochs'])):
+        print("Training classifiers")
+
+        # MLP
+        if not self._mlp_classifier_end2end:
+            tot_epochs_mlp = self._classifier_params['mlp_epochs']
+            for epoch in tqdm.tqdm(range(tot_epochs_mlp)):
                 tr_loss, tr_acc = self.mlp_classifier_epoch(
                     self._train_latents_list, self._train_dict_labels_lists)
                 val_loss, val_acc = self.mlp_classifier_epoch(
@@ -636,22 +640,45 @@ class ModelManager(torch.nn.Module):
                 writer.add_scalar("train/class_acc", tr_acc, epoch + 1)
                 writer.add_scalar("validation/class_loss", val_loss, epoch + 1)
                 writer.add_scalar("validation/class_acc", val_acc, epoch + 1)
-            self.save_classifier(checkpoint_dir)
-        else:
-            latents = torch.cat(self._train_latents_list, dim=0).numpy()
-            y_gt = self.class2idx(
-                np.concatenate(self._train_dict_labels_lists['y']))
-            latents_val = torch.cat(val_latents_list, dim=0).numpy()
-            y_gt_val = self.class2idx(np.concatenate(val_l_list['y']))
+            self.save_classifier(checkpoint_dir, 'mlp')
 
-            self._classifier.fit(latents, y_gt)
-            y_pred_val = self._classifier.predict(latents_val)
-            accuracy_val = metrics.accuracy_score(y_gt_val, y_pred_val)
-            print(f"SVM validation accuracy = {accuracy_val}")
+        latents = torch.cat(self._train_latents_list, dim=0).numpy()
+        y_gt = self.class2idx(
+            np.concatenate(self._train_dict_labels_lists['y']))
+        latents_val = torch.cat(val_latents_list, dim=0).numpy()
+        y_gt_val = self.class2idx(np.concatenate(val_l_list['y']))
+
+        # SVM
+        self._classifier_svm.fit(latents, y_gt)
+        accuracy_svm = self._classifier_svm.score(latents_val, y_gt_val)
+        print(f"SVM validation accuracy = {accuracy_svm}")
+        self.save_classifier(checkpoint_dir, 'svm')
+
+        self._lda.fit(latents, y_gt)
+        accuracy_lda = self._lda.score(latents_val, y_gt_val)
+        print(f"SVM validation accuracy = {accuracy_lda}")
+        self.save_classifier(checkpoint_dir, 'lda')
+
+    def lda_project_latents_in_2d(self, latents):
+        return self._lda.transform(latents)
+
+    def lda_sample(self):
+        pass  # TODO: implement me
 
     @torch.no_grad()
-    def classify_latent(self, z):
-        return self.idx2class(self._classifier(z.to(self.device)))
+    def classify_latent(self, z, model='main'):
+        if model == 'main':
+            model = self._classifier_params['main_model_type']
+
+        if model == 'mlp':
+            y_pred = self._classifier_mlp(z.to(self.device)).detach().numpy()
+        elif model == 'svm':
+            y_pred = self._classifier_svm.predict(z.detach().numpy())
+        elif model == 'lda':
+            y_pred = self._lda.predict(z.detach().numpy())
+        else:
+            raise NotImplementedError
+        return self.idx2class(y_pred)
 
     def set_class_conversions_and_weights(self, data_c_and_w):
         self._class2idx_dict = {k: i for i, k in enumerate(data_c_and_w.keys())}
@@ -789,8 +816,8 @@ class ModelManager(torch.nn.Module):
                 checkpoint_dir, 'gmm_%08d.pkl' % (epoch + 1))
             with open(gmm_name, 'wb') as f:
                 pickle.dump(self._gaussian_mixture, f)
-        if self._classifier and not self.separately_train_classifier:
-            self.save_classifier(checkpoint_dir)
+        if self._classifier_params and self._mlp_classifier_end2end:
+            self.save_classifier(checkpoint_dir, 'mlp')
 
     def resume(self, checkpoint_dir):
         last_model_name = utils.get_model_list(checkpoint_dir, 'model')
@@ -807,32 +834,46 @@ class ModelManager(torch.nn.Module):
                     self._gaussian_mixture = pickle.load(f)
             except FileNotFoundError:
                 print("GMM of RAE not fitted yet. The GMM was not loaded.")
-        if self._classifier is not None:
-            try:
-                self.resume_classifier(checkpoint_dir)
-            except FileNotFoundError:
-                print("Classifier not trained yet. Not loading its weights.")
+        if self._classifier_params is not None:
+            self.resume_classifier(checkpoint_dir, 'mlp')
+            self.resume_classifier(checkpoint_dir, 'svm')
+            self.resume_classifier(checkpoint_dir, 'lda')
         print(f"Resume from epoch {epochs}")
         return epochs
 
-    def save_classifier(self, checkpoint_dir):
-        if self._classifier_params['model_type'] == 'mlp':
+    def save_classifier(self, checkpoint_dir, classifier_type='mlp'):
+        if classifier_type == 'mlp':
             net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
-            torch.save({'model': self._classifier.state_dict()}, net_name)
-        else:
+            torch.save({'model': self._classifier_mlp.state_dict()}, net_name)
+        elif classifier_type == 'svm':
             svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
             with open(svm_name, 'wb') as f:
-                pickle.dump(self._classifier, f)
-
-    def resume_classifier(self, checkpoint_dir):
-        if self._classifier_params['model_type'] == 'mlp':
-            net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
-            state_dict = torch.load(net_name)
-            self._classifier.load_state_dict(state_dict['model'])
+                pickle.dump(self._classifier_svm, f)
+        elif classifier_type == 'lda':
+            lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
+            with open(lda_name, 'wb') as f:
+                pickle.dump(self._lda, f)
         else:
-            svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
-            with open(svm_name, 'rb') as f:
-                self._classifier = pickle.load(f)
+            raise NotImplementedError
+
+    def resume_classifier(self, checkpoint_dir, classifier_type='mlp'):
+        try:
+            if classifier_type == 'mlp':
+                net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
+                state_dict = torch.load(net_name)
+                self._classifier_mlp.load_state_dict(state_dict['model'])
+            elif classifier_type == 'svm':
+                svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
+                with open(svm_name, 'rb') as f:
+                    self._classifier_svm = pickle.load(f)
+            elif classifier_type == 'lda':
+                lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
+                with open(lda_name, 'rb') as f:
+                    self._lda = pickle.load(f)
+            else:
+                raise NotImplementedError
+        except FileNotFoundError:
+            print(f"Can't load classifier {classifier_type}: not trained yet.")
 
 
 class ShadelessShader(torch.nn.Module):

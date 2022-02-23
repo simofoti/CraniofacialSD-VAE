@@ -82,9 +82,8 @@ for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
 if manager.is_rae:
     manager.fit_gaussian_mixture(train_loader)
 
-if manager.separately_train_classifier:
-    manager.train_and_validate_classifier(train_loader, validation_loader,
-                                          writer, checkpoint_dir)
+manager.train_and_validate_classifiers(train_loader, validation_loader,
+                                       writer, checkpoint_dir)
 
 Tester(manager, normalization_dict, train_loader, test_loader,
        output_directory, config)()
