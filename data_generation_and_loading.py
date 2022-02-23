@@ -517,7 +517,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             else:
                 eigd = None
 
-            initial_list = self._train_names
+            initial_list = self._train_names.copy()
             data_classes = set([name[0] for name in initial_list])
             paths_age_gender_per_class = {cl: [] for cl in data_classes}
             for name in initial_list:
