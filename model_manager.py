@@ -6,7 +6,7 @@ import tqdm
 
 import numpy as np
 
-from sklearn import mixture
+from sklearn import mixture, svm, metrics
 from torch.nn.functional import cross_entropy
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
@@ -148,9 +148,10 @@ class ModelManager(torch.nn.Module):
                     weight_decay=self._optimization_params['weight_decay'])
                 self._w_classifier_loss = self._classifier_params['loss_weight']
             elif self._classifier_params['model_type'] == 'svm':
-                # TODO: implement svm
-                raise NotImplementedError
+                self._w_classifier_loss = 0
+                self._classifier = svm.LinearSVC(class_weight='balanced')
             else:
+                self._w_classifier_loss = 0
                 self._classifier = None
 
         # If latents are used for other purposes avoids embedding all training
@@ -610,7 +611,7 @@ class ModelManager(torch.nn.Module):
                                       writer, checkpoint_dir):
         if self._train_latents_list is None:
             self.encode_all(train_loader, is_train_loader=True)
-        val_latents_list, val_y_list = self.encode_all(validation_loader, False)
+        val_latents_list, val_l_list = self.encode_all(validation_loader, False)
 
         print("Training classifier")
         if self._classifier_params['model_type'] == 'mlp':
@@ -618,14 +619,23 @@ class ModelManager(torch.nn.Module):
                 tr_loss, tr_acc = self.mlp_classifier_epoch(
                     self._train_latents_list, self._train_dict_labels_lists)
                 val_loss, val_acc = self.mlp_classifier_epoch(
-                    val_latents_list, val_y_list, False)
+                    val_latents_list, val_l_list, False)
                 writer.add_scalar("train/class_loss", tr_loss, epoch + 1)
                 writer.add_scalar("train/class_acc", tr_acc, epoch + 1)
                 writer.add_scalar("validation/class_loss", val_loss, epoch + 1)
                 writer.add_scalar("validation/class_acc", val_acc, epoch + 1)
             self.save_classifier(checkpoint_dir)
-        else:  # TODO: fit SVM
-            raise NotImplementedError
+        else:
+            latents = torch.cat(self._train_latents_list, dim=0).numpy()
+            y_gt = self.class2idx(
+                np.concatenate(self._train_dict_labels_lists['y']))
+            latents_val = torch.cat(val_latents_list, dim=0).numpy()
+            y_gt_val = self.class2idx(np.concatenate(val_l_list['y']))
+
+            self._classifier.fit(latents, y_gt)
+            y_pred_val = self._classifier.predict(latents_val)
+            accuracy_val = metrics.accuracy_score(y_gt_val, y_pred_val)
+            print(f"SVM validation accuracy = {accuracy_val}")
 
     @torch.no_grad()
     def classify_latent(self, z):
@@ -779,6 +789,7 @@ class ModelManager(torch.nn.Module):
         self._optimizer.load_state_dict(state_dict['optimizer'])
         if self.is_rae:
             gmm_name = last_model_name.replace('model', 'gmm')
+            gmm_name = gmm_name.replace('.pt', '.pkl')
             try:
                 with open(gmm_name, 'rb') as f:
                     self._gaussian_mixture = pickle.load(f)
@@ -797,8 +808,9 @@ class ModelManager(torch.nn.Module):
             net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
             torch.save({'model': self._classifier.state_dict()}, net_name)
         else:
-            # TODO: save svm
-            raise NotImplementedError
+            svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
+            with open(svm_name, 'wb') as f:
+                pickle.dump(self._classifier, f)
 
     def resume_classifier(self, checkpoint_dir):
         if self._classifier_params['model_type'] == 'mlp':
@@ -806,8 +818,9 @@ class ModelManager(torch.nn.Module):
             state_dict = torch.load(net_name)
             self._classifier.load_state_dict(state_dict['model'])
         else:
-            # TODO: load svm
-            raise NotImplementedError
+            svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
+            with open(svm_name, 'rb') as f:
+                self._classifier = pickle.load(f)
 
 
 class ShadelessShader(torch.nn.Module):
