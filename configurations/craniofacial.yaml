@@ -53,8 +53,8 @@ model:
   pre_z_sigmoid: False
 
 classifier:
-  main_model_type: mlp                                                          # {mlp, svm, lda, none}
-  mlp_training_type: after                                                    # {end2end, after}
+  main_model_type: mlp                                                          # {mlp, svm, lda, qda, none}
+  mlp_training_type: after                                                      # {end2end, after}
   mlp_hidden_features: [512, 128, 64]
   mlp_lr: 1e-4
   mlp_loss_weight: 1                                                            # only if training_type is end2end

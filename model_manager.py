@@ -158,7 +158,9 @@ class ModelManager(torch.nn.Module):
 
             self._classifier_svm = svm.LinearSVC(class_weight='balanced')
             self._lda = discriminant_analysis.LinearDiscriminantAnalysis(
-                n_components=2)  # dimension for dimensionality reduction
+                n_components=2, store_covariance=True)
+            self._qda = discriminant_analysis.QuadraticDiscriminantAnalysis(
+                store_covariance=True)
         else:
             self._classifier_params = None
 
@@ -654,16 +656,27 @@ class ModelManager(torch.nn.Module):
         print(f"SVM validation accuracy = {accuracy_svm}")
         self.save_classifier(checkpoint_dir, 'svm')
 
+        # LDA
         self._lda.fit(latents, y_gt)
         accuracy_lda = self._lda.score(latents_val, y_gt_val)
-        print(f"SVM validation accuracy = {accuracy_lda}")
+        print(f"LDA validation accuracy = {accuracy_lda}")
         self.save_classifier(checkpoint_dir, 'lda')
+
+        # QDA
+        self._qda.fit(latents, y_gt)
+        accuracy_qda = self._qda.score(latents_val, y_gt_val)
+        print(f"QDA validation accuracy = {accuracy_qda}")
+        self.save_classifier(checkpoint_dir, 'qda')
 
     def lda_project_latents_in_2d(self, latents):
         return self._lda.transform(latents)
 
-    def lda_sample(self):
-        pass  # TODO: implement me
+    def qda_sample(self, sample_class='a', n_samples=1):
+        if isinstance(sample_class, str):
+            sample_class = self.class2idx(sample_class)
+        mean = self._qda.means_[sample_class]
+        cov = self._qda.covariance_[sample_class]
+        return np.random.multivariate_normal(mean, cov, n_samples)
 
     @torch.no_grad()
     def classify_latent(self, z, model='main'):
@@ -676,6 +689,8 @@ class ModelManager(torch.nn.Module):
             y_pred = self._classifier_svm.predict(z.detach().numpy())
         elif model == 'lda':
             y_pred = self._lda.predict(z.detach().numpy())
+        elif model == 'qda':
+            y_pred = self._qda.predict(z.detach().numpy())
         else:
             raise NotImplementedError
         return self.idx2class(y_pred)
@@ -838,6 +853,7 @@ class ModelManager(torch.nn.Module):
             self.resume_classifier(checkpoint_dir, 'mlp')
             self.resume_classifier(checkpoint_dir, 'svm')
             self.resume_classifier(checkpoint_dir, 'lda')
+            self.resume_classifier(checkpoint_dir, 'qda')
         print(f"Resume from epoch {epochs}")
         return epochs
 
@@ -853,6 +869,10 @@ class ModelManager(torch.nn.Module):
             lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
             with open(lda_name, 'wb') as f:
                 pickle.dump(self._lda, f)
+        elif classifier_type == 'qda':
+            qda_name = os.path.join(checkpoint_dir, 'qda_classifier.pkl')
+            with open(qda_name, 'wb') as f:
+                pickle.dump(self._qda, f)
         else:
             raise NotImplementedError
 
@@ -870,6 +890,10 @@ class ModelManager(torch.nn.Module):
                 lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
                 with open(lda_name, 'rb') as f:
                     self._lda = pickle.load(f)
+            elif classifier_type == 'qda':
+                qda_name = os.path.join(checkpoint_dir, 'qda_classifier.pkl')
+                with open(qda_name, 'rb') as f:
+                    self._qda = pickle.load(f)
             else:
                 raise NotImplementedError
         except FileNotFoundError:
