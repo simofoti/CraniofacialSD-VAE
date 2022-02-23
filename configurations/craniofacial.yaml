@@ -51,6 +51,14 @@ model:
   latent_size: 76                                                               # size of the latent vector
   pre_z_sigmoid: False
 
+classifier:
+  model_type: mlp                                                               # {mlp, svm, none}
+  training_type: end2end                                                        # {end2end, after}
+  mlp_hidden_features: [512, 128, 64]
+  lr: 1e-4
+  loss_weight: 1                                                                # only if training_type is end2end
+  epochs: 100                                                                   # only if training_type is after
+
 logging_frequency:
   tb_renderings: 5
   save_weights: 20

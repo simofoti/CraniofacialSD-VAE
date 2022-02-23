@@ -50,12 +50,13 @@ manager = ModelManager(
     configurations=config, device=device,
     precomputed_storage_path=config['data']['precomputed_path'])
 
-train_loader, validation_loader, test_loader, normalization_dict = \
+train_loader, validation_loader, test_loader, normalization_dict, d_classes = \
     get_data_loaders(config, manager.template)
 
 train_visualization_batch = next(iter(train_loader))
 validation_visualization_batch = next(iter(validation_loader))
 
+manager.set_class_conversions(d_classes)
 # manager.render_and_show_batch(train_visualization_batch, normalization_dict)
 
 if opts.resume:
@@ -80,6 +81,10 @@ for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
 
 if manager.is_rae:
     manager.fit_gaussian_mixture(train_loader)
+
+if manager.separately_train_classifier:
+    manager.train_and_validate_classifier(train_loader, validation_loader,
+                                          writer, checkpoint_dir)
 
 Tester(manager, normalization_dict, train_loader, test_loader,
        output_directory, config)()

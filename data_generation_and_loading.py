@@ -120,7 +120,9 @@ def get_data_loaders(config, template=None):
     test_loader = MeshLoader(test_set, batch_size, shuffle=False,
                              drop_last=True, feature_swapper=swapper,
                              num_workers=data_config['number_of_workers'])
-    return train_loader, validation_loader, test_loader, normalization_dict
+    data_classes = train_set.data_classes
+    return train_loader, validation_loader, test_loader, \
+        normalization_dict, data_classes
 
 
 class MeshLoader(torch.utils.data.DataLoader):

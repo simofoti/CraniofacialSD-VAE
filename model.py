@@ -236,3 +236,19 @@ class FactorVAEDiscriminator(nn.Module):
         if isinstance(layer, nn.Linear):
             x = layer.weight
             return nn.init.kaiming_uniform_(x, a=0.2, nonlinearity='leaky_relu')
+
+
+class MLPClassifier(nn.Module):
+    def __init__(self, in_features, hidden_features, out_classes):
+        super(MLPClassifier, self).__init__()
+        features = [in_features] + hidden_features + [out_classes]
+        self.model = []
+        for i in range(1, len(features)):
+            self.model += [nn.Linear(features[i-1], features[i]), nn.ReLU()]
+        self.model = torch.nn.Sequential(*self.model)
+
+    def forward(self, x):
+        out = self.model(x)
+        out_label = torch.max(torch.log_softmax(out, dim=1), dim=1)[1]
+        return out, out_label
+
