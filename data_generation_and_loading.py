@@ -293,7 +293,8 @@ class MeshDataset(Dataset):
             if self._normalize:
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
-            data = Data(x=mesh_verts, y=fname[0], augmented=('aug' in fname))
+            y = fname.split('/')[1][0] if '/' in fname else fname[0]
+            data = Data(x=mesh_verts, y=y, augmented=('aug' in fname))
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
@@ -487,7 +488,8 @@ class MeshInMemoryDataset(InMemoryDataset):
             age, gender = get_age_and_gender_from_summary(
                 self._dataset_summary, fname[2:-4], self._data_type)
 
-            data = Data(x=mesh_verts, y=fname[0],
+            y = fname.split('/')[1][0] if '/' in fname else fname[0]
+            data = Data(x=mesh_verts, y=y,
                         augmented=('aug' in fname),
                         age=age, gender=gender)
 
