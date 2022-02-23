@@ -56,7 +56,7 @@ train_loader, validation_loader, test_loader, normalization_dict, d_classes = \
 train_visualization_batch = next(iter(train_loader))
 validation_visualization_batch = next(iter(validation_loader))
 
-manager.set_class_conversions(d_classes)
+manager.set_class_conversions_and_weights(d_classes)
 # manager.render_and_show_batch(train_visualization_batch, normalization_dict)
 
 if opts.resume:

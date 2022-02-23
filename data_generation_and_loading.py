@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from abc import abstractmethod
+from collections import Counter
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Dataset, InMemoryDataset, Data
 from sklearn.model_selection import train_test_split
@@ -120,9 +121,9 @@ def get_data_loaders(config, template=None):
     test_loader = MeshLoader(test_set, batch_size, shuffle=False,
                              drop_last=True, feature_swapper=swapper,
                              num_workers=data_config['number_of_workers'])
-    data_classes = train_set.data_classes
+    data_classes_and_weights = train_set.classes_weights
     return train_loader, validation_loader, test_loader, \
-        normalization_dict, data_classes
+        normalization_dict, data_classes_and_weights
 
 
 class MeshLoader(torch.utils.data.DataLoader):
@@ -353,6 +354,8 @@ class MeshInMemoryDataset(InMemoryDataset):
         super(MeshInMemoryDataset, self).__init__(
             root, transform, pre_transform)
 
+        self.classes_weights = self.compute_classes_and_weights(dataset_type)
+
         if dataset_type == 'train':
             data_path = self.processed_paths[0]
         elif dataset_type == 'test':
@@ -381,6 +384,17 @@ class MeshInMemoryDataset(InMemoryDataset):
     @property
     def data_classes(self):
         return set([name[0] for name in self._train_names])
+
+    def compute_classes_and_weights(self, dataset_type='train'):
+        if dataset_type == 'train':
+            all_names = self._train_names
+        elif dataset_type == 'test':
+            all_names = self._test_names
+        else:
+            all_names = self._val_names
+        all_cls = [n.split('/')[1][0] if '/' in n else n[0] for n in all_names]
+        n_aug_per_class = Counter(all_cls)
+        return {k: 1 / v for k, v in n_aug_per_class.items()}
 
     def download(self):
         pass

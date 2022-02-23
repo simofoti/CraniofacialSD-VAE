@@ -135,6 +135,7 @@ class ModelManager(torch.nn.Module):
             fnames = os.listdir(configurations['data']['dataset_path'])
             n_classes = len(set([n[0] for n in fnames if n.endswith('.obj')]))
             self._class2idx_dict = None
+            self._class_weights = None
 
             if self._classifier_params['model_type'] == 'mlp':
                 self._classifier = MLPClassifier(
@@ -429,7 +430,7 @@ class ModelManager(torch.nn.Module):
 
     def compute_classification_loss_and_acc(self, y_pred, y_pred_label, y_gt):
         y_gt_tens = torch.tensor(self.class2idx(y_gt), device=y_pred.device)
-        loss = torch.nn.CrossEntropyLoss()(y_pred, y_gt_tens)
+        loss = torch.nn.CrossEntropyLoss(self._class_weights)(y_pred, y_gt_tens)
         acc = 100 * torch.sum(y_pred_label == y_gt_tens) / len(y_gt)
         return loss, acc
 
@@ -630,8 +631,13 @@ class ModelManager(torch.nn.Module):
     def classify_latent(self, z):
         return self.idx2class(self._classifier(z.to(self.device)))
 
-    def set_class_conversions(self, data_classes):
-        self._class2idx_dict = {k: i for i, k in enumerate(data_classes)}
+    def set_class_conversions_and_weights(self, data_c_and_w):
+        self._class2idx_dict = {k: i for i, k in enumerate(data_c_and_w.keys())}
+        idx2class = {v: k for k, v in self._class2idx_dict.items()}
+        n_classes = len(data_c_and_w.keys())
+        list_weights = [data_c_and_w[idx2class[i]] for i in range(n_classes)]
+        self._class_weights = torch.tensor(list_weights)
+        self._class_weights /= self._class_weights.sum()
 
     def class2idx(self, data_class):
         if isinstance(data_class, list) or isinstance(data_class, np.ndarray):
