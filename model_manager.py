@@ -431,7 +431,8 @@ class ModelManager(torch.nn.Module):
 
     def compute_classification_loss_and_acc(self, y_pred, y_pred_label, y_gt):
         y_gt_tens = torch.tensor(self.class2idx(y_gt), device=y_pred.device)
-        loss = torch.nn.CrossEntropyLoss(self._class_weights)(y_pred, y_gt_tens)
+        class_weights = self._class_weights.to(y_gt_tens.device)
+        loss = torch.nn.CrossEntropyLoss(class_weights)(y_pred, y_gt_tens)
         acc = 100 * torch.sum(y_pred_label == y_gt_tens) / len(y_gt)
         return loss, acc
 
@@ -571,9 +572,20 @@ class ModelManager(torch.nn.Module):
             self.encode_all(train_loader, is_train_loader=True)
         latents = torch.cat(self._train_latents_list, dim=0)
 
+        if self._optimization_params['rae_gmm_mean_initialization']:
+            y_gt = np.concatenate(self._train_dict_labels_lists['y'])
+            means = []
+            for c in set(y_gt):
+                latents_c = latents[np.argwhere(y_gt == c)[:, 0], :]
+                means.append(torch.mean(latents_c, dim=0))
+            means_array = torch.stack(means).detach().numpy()
+            n_gaussians = means_array.shape[0]
+        else:
+            n_gaussians = self._optimization_params['rae_n_gaussians']
+            means_array = None
+
         gmm = mixture.GaussianMixture(
-            n_components=self._optimization_params['rae_n_gaussians'],
-            means_init=None,  # TODO: use labels (if available) to compute means
+            n_components=n_gaussians, means_init=means_array,
             covariance_type="full", max_iter=2000, verbose=0, tol=1e-3)
         gmm.fit(latents.cpu().detach())
         self._gaussian_mixture = gmm
