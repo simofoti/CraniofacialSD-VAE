@@ -12,8 +12,10 @@ from collections import Counter
 from torch_geometric.data import Data
 from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix
 from pandas import read_excel
+from scipy.linalg import eigh, norm
 from scipy.sparse.linalg import eigsh
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, ListedColormap, to_rgba_array
+from matplotlib.patches import Ellipse
 
 
 def get_config(config):
@@ -233,3 +235,24 @@ def get_per_vertex_eigenvector_color(eigenvec_matrix, eigenvec_n):
     e_vec = eigenvec_matrix[:, eigenvec_n]
     colors = cmap(Normalize(vmin=e_vec.min(), vmax=e_vec.max())(e_vec))
     return colors
+
+
+def create_alpha_cmap(base_color_name):
+    vals = np.ones((256, 4))
+    base_color = to_rgba_array(base_color_name)
+    vals[:, 0] = np.linspace(1, base_color[0, 0], 256)
+    vals[:, 1] = np.linspace(1, base_color[0, 1], 256)
+    vals[:, 2] = np.linspace(1, base_color[0, 2], 256)
+    vals[:10, 3] = np.linspace(0, 1, 10)
+    return ListedColormap(vals)
+
+
+def get_gaussian_ellipse(mean, covariance, color, n_sigma=3):
+    v, w = eigh(covariance)
+    u = w[0] / norm(w[0])
+    angle = 180 * np.arctan(u[1] / u[0]) / np.pi
+
+    ell = Ellipse(mean, n_sigma * v[0] ** 0.5, n_sigma * v[1] ** 0.5,
+                  180 + angle, facecolor=color, edgecolor=color, linewidth=2)
+    ell.set_alpha(0.2)
+    return ell

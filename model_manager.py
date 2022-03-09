@@ -5,6 +5,7 @@ import trimesh
 import tqdm
 
 import numpy as np
+import seaborn as sns
 
 from sklearn import mixture, svm, discriminant_analysis
 from torch.nn.functional import cross_entropy
@@ -194,6 +195,10 @@ class ModelManager(torch.nn.Module):
     @property
     def batch_diagonal_idx(self):
         return self._batch_diagonal_idx
+
+    @property
+    def train_latents_and_labels(self):
+        return self._train_latents_list, self._train_dict_labels_lists
 
     def _precompute_transformations(self, show_meshes=False):
         storage_path = os.path.join(self._precomputed_storage_path,
@@ -712,7 +717,11 @@ class ModelManager(torch.nn.Module):
 
     def idx2class(self, idx):
         idx2class_dict = {v: k for k, v in self._class2idx_dict.items()}
-        return idx2class_dict[idx]
+        if isinstance(idx, list) or isinstance(idx, np.ndarray):
+            c = [idx2class_dict[i] for i in idx]
+        else:
+            c = idx2class_dict[idx]
+        return c
 
     def _reset_losses(self):
         self._losses = {k: 0 for k in self.loss_keys}

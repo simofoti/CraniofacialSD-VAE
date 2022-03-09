@@ -594,6 +594,7 @@ class MeshInMemoryDataset(InMemoryDataset):
 
     def _spectral_projections_analysis(self, k=200, plot_type='scatter'):
         import matplotlib.pyplot as plt
+        import seaborn as sns
         from matplotlib.colors import Normalize
         from matplotlib.cm import get_cmap
 
@@ -607,6 +608,7 @@ class MeshInMemoryDataset(InMemoryDataset):
         spectral_proj_template = u.T @ self._template.pos.detach().cpu().numpy()
         data_classes = set([name[0] for name in self._train_names])
 
+        sns.set_theme(style="ticks")
         fig, axs = plt.subplots(len(data_classes), 3, figsize=(10, 10))
 
         for c_i, c in enumerate(data_classes):

@@ -18,6 +18,7 @@ from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
+from utils import create_alpha_cmap
 
 
 class Tester:
@@ -50,6 +51,7 @@ class Tester:
         self.set_rendering_background_color([1, 1, 1])
 
         # Qualitative evaluations
+        self.plot_embeddings()
         if self._config['data']['swap_features']:
             self.latent_swapping(next(iter(self._test_loader)).x)
         self.per_variable_range_experiments(use_z_stats=False)
@@ -744,6 +746,85 @@ class Tester:
             ls.append(torch.linspace(s, f, steps))
         res = torch.stack(ls)
         return res.t()
+
+    def plot_embeddings(self):
+        tr_z, tr_l = self._manager.train_latents_and_labels
+        if tr_z is None:
+            tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
+        ts_z, ts_l = self._manager.encode_all(self._test_loader, False)
+        tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
+        ts_y = np.array(self._manager.class2idx(np.concatenate(ts_l['y'])))
+
+        tr_z_np = torch.cat(tr_z, dim=0).numpy()
+        ts_z_np = torch.cat(ts_z, dim=0).numpy()
+        tr_z_np_2d = self._manager.lda_project_latents_in_2d(tr_z_np)
+        ts_z_np_2d = self._manager.lda_project_latents_in_2d(ts_z_np)
+
+        df = pd.DataFrame({
+            'x1': np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 0],
+            'x2': np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 1],
+            'class': self._manager.idx2class(np.concatenate([tr_y, ts_y])),
+            'type': ['train'] * tr_y.shape[0] + ['test'] * ts_y.shape[0],
+            'aug': np.concatenate([np.concatenate(tr_l['augmented']),
+                                  np.concatenate(ts_l['augmented'])])
+        })
+
+        # TRAIN vs TEST
+        sns.scatterplot(data=df, x='x1', y='x2', hue='class', style='type')
+        plt.show()
+
+        # TRAIN REAL vs TRAIN AUG
+        sns.scatterplot(data=df.loc[df['type'] == 'train'],
+                        x='x1', y='x2', hue='class', style='aug')
+        plt.show()
+
+        # TRAIN REAL vs TRAIN AUG, distributions on real
+        sns.kdeplot(data=df.loc[(df['type'] == 'train') & (~df['aug'])],
+                    x='x1', y='x2', hue='class', fill=True)
+        sns.scatterplot(data=df.loc[df['aug']],
+                        x='x1', y='x2', hue='class')
+        plt.show()
+
+        # TRAIN REAL, trying to shade and blend distributions
+        cmaps = [create_alpha_cmap(c) for c in ['coral', 'teal', 'royalblue',
+                                                'mediumseagreen', 'orchid']]
+
+        for c, cmap in zip(set(tr_y), cmaps):
+            sns.kdeplot(
+                data=df.loc[(df['type'] == 'train') & (~df['aug']) &
+                            (df['class'] == self._manager.idx2class(c))],
+                x='x1', y='x2', fill=True, thresh=0, levels=256, cmap=cmap
+            )
+            sns.kdeplot(
+                data=df.loc[(df['type'] == 'train') & (~df['aug']) &
+                            (df['class'] == self._manager.idx2class(c))],
+                x='x1', y='x2', levels=5, color="w", linewidths=1
+            )
+        plt.show()
+
+        self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
+
+        print('lpot')
+
+    def plot_embeddings_per_region(self, tr_z_np, tr_y, tr_l):
+        per_region_dfs_list = []
+        for key, z_region in self._manager.latent_regions.items():
+            if z_region[1] - z_region[0] > 2:
+                # TODO: pca? (no lda because supervised)
+                raise NotImplementedError
+            per_region_dfs_list.append(pd.DataFrame({
+                'x1': tr_z_np[:, z_region[0]],
+                'x2': tr_z_np[:, z_region[1] - 1],
+                'class': self._manager.idx2class(tr_y),
+                'aug': np.concatenate(tr_l['augmented']),
+                'region': np.array([key] * tr_y.shape[0])
+            }))
+        df = pd.concat(per_region_dfs_list)
+
+        # also augmented data are scattered
+        g = sns.FacetGrid(df, col='region', col_wrap=6, height=2)
+        g.map(sns.scatterplot, 'x1', 'x2', 'class', s=10)
+        plt.show()
 
 
 if __name__ == '__main__':
