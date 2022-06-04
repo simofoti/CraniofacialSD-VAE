@@ -162,7 +162,8 @@ class MeshDataset(Dataset):
     def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
         self._root = root
-        self._dataset_summary = get_dataset_summary(data_config)
+        self._dataset_summary = get_dataset_summary(
+            data_config, data_config['data_type'])
         self._data_to_use = find_data_used_from_summary(
             self._dataset_summary, data_config['data_type'])
 
@@ -220,7 +221,7 @@ class MeshDataset(Dataset):
                 if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
                     if self._data_to_use is None:
                         files.append(f)
-                    elif f[2:-4] in self._data_to_use:
+                    elif f[:-4] in self._data_to_use:
                         files.append(f)
         return files
 
@@ -322,7 +323,8 @@ class MeshInMemoryDataset(InMemoryDataset):
                  transform=None, pre_transform=None, template=None):
         self._root = root
         self._data_type = data_config['data_type']
-        self._dataset_summary = get_dataset_summary(data_config)
+        self._dataset_summary = get_dataset_summary(
+            data_config, self._data_type)
         self._data_to_use = find_data_used_from_summary(
             self._dataset_summary, self._data_type)
 
@@ -347,9 +349,10 @@ class MeshInMemoryDataset(InMemoryDataset):
         self.mean = normalization_dict['mean']
         self.std = normalization_dict['std']
 
-        if dataset_type == 'train':
+        augmentation_factor = data_config['augmentation_factor']
+        if dataset_type == 'train' and augmentation_factor > 0:
             self._augment(mode=data_config['augmentation_mode'],
-                          aug_factor=data_config['augmentation_factor'],
+                          aug_factor=augmentation_factor,
                           balanced=data_config['augmentation_balanced'])
 
         super(MeshInMemoryDataset, self).__init__(
@@ -407,7 +410,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                 if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
                     if self._data_to_use is None:
                         files.append(f)
-                    elif f[2:-4] in self._data_to_use:
+                    elif f[:-4] in self._data_to_use:
                         files.append(f)
         return files
 
@@ -486,9 +489,10 @@ class MeshInMemoryDataset(InMemoryDataset):
                 mesh_verts = (mesh_verts - self.mean) / self.std
 
             age, gender = get_age_and_gender_from_summary(
-                self._dataset_summary, fname[2:-4], self._data_type)
+                self._dataset_summary, fname[:-4])
 
             y = fname.split('/')[1][0] if '/' in fname else fname[0]
+            y = 'n' if y == 'b' else y
             data = Data(x=mesh_verts, y=y,
                         augmented=('aug' in fname),
                         age=age, gender=gender)
@@ -538,9 +542,13 @@ class MeshInMemoryDataset(InMemoryDataset):
             paths_age_gender_per_class = {cl: [] for cl in data_classes}
             for name in initial_list:
                 age, gender = get_age_and_gender_from_summary(
-                    self._dataset_summary, name[2:-4], self._data_type)
+                    self._dataset_summary, name[:-4])
                 info = {'name': name, 'gender': gender, 'age': age}
                 paths_age_gender_per_class[name[0]].append(info)
+
+            # Merge paediatric and normal
+            paths_age_gender_per_class['n'] += paths_age_gender_per_class['b']
+            del paths_age_gender_per_class['b']
 
             if not os.path.isdir(augmented_dir):
                 os.mkdir(augmented_dir)
@@ -616,7 +624,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                 if name[0] == c:
                     path = os.path.join(self._root, name)
                     age, gender = get_age_and_gender_from_summary(
-                        self._dataset_summary, name[2:-4], self._data_type)
+                        self._dataset_summary, name[:-4])
 
                     mesh = trimesh.load_mesh(path, process=False)
                     spectral_proj = u.T @ np.array(mesh.vertices)
@@ -630,7 +638,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                     line_colour[-1] = 0.7
 
                     # line_colour = 'b' if gender == 'M' else 'r'
-                    # line_colour = 'darkslategrey' if age > 12 * 3 else 'coral'
+                    # line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
 
                     if plot_type == 'line':
                         axs[c_i, 0].set_title(f"{c}_s1")

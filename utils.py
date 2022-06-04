@@ -165,12 +165,22 @@ def get_model_list(dirname, key):
     return last_model_name
 
 
-def get_dataset_summary(data_config):
+def get_dataset_summary(data_config, data_type):
     if 'dataset_summary_path' in data_config:
-        dataset_summary = read_excel(data_config['dataset_summary_path'])
+        d_summary = read_excel(data_config['dataset_summary_path'])
+        d_summary['mesh_name'] = 'nan'
+        d_summary.loc[d_summary['Dataset'] == 'Paeds', 'mesh_name'] = 'b'
+        d_summary.loc[d_summary['Dataset'] == 'Apert', 'mesh_name'] = 'a'
+        d_summary.loc[d_summary['Dataset'] == 'Crouzon', 'mesh_name'] = 'c'
+        d_summary.loc[d_summary['Dataset'] == 'Muenke', 'mesh_name'] = 'm'
+        d_summary.loc[d_summary['Dataset'] == 'LSFM', 'mesh_name'] = 'n'
+        d_summary.loc[d_summary['Dataset'] == 'LYHM', 'mesh_name'] = 'n'
+        id_column = 'ID' if data_type == 'heads' else 'PID'
+        d_summary['mesh_name'] = d_summary['mesh_name'] + '_' + \
+            d_summary[id_column].fillna(-1).astype(int).astype(str)
     else:
-        dataset_summary = None
-    return dataset_summary
+        d_summary = None
+    return d_summary
 
 
 def find_data_used_from_summary(summary, data_type):
@@ -178,16 +188,18 @@ def find_data_used_from_summary(summary, data_type):
         return None
     else:
         cond_column = "Head Used" if data_type == 'heads' else "Face Used"
-        id_column = 'ID' if data_type == 'heads' else 'PID'
-        ids_to_use = summary.loc[summary[cond_column] == 'y'][id_column]
-        return list(ids_to_use.astype(int).astype(str))
+        ids_to_use = summary.loc[summary[cond_column] == 'y']['mesh_name']
+        return list(ids_to_use)
 
 
-def get_age_and_gender_from_summary(summary, mesh_id, data_type):
+def get_age_and_gender_from_summary(summary, mesh_id):
     try:
-        id_column_name = 'ID' if data_type == 'heads' else 'PID'
-        id_column = summary[id_column_name].fillna(-1).astype(int).astype(str)
+        id_column = summary['mesh_name']
         age = summary.loc[id_column == mesh_id]['AgeMonths'].values[0]
+        if np.isnan(age):
+            age = summary.loc[id_column == mesh_id]['AgeYears'].values[0] * 12
+            # Add half of a year. It is unlikely they just had their birthday...
+            age += 6
         gender = summary.loc[id_column == mesh_id]['Gender'].values[0]
     except IndexError:  # should be triggered by augmented meshes
         age, gender = -1, 'n/a'
