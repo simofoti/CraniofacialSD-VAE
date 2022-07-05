@@ -148,19 +148,19 @@ class ModelManager(torch.nn.Module):
             self._class_weights = None
 
             self._main_classifier = None
-            self._classifier_mlp = MLPClassifier(
+            self.classifier_mlp = MLPClassifier(
                 self._model_params['latent_size'],
                 self._classifier_params['mlp_hidden_features'],
                 n_classes).to(device)
             self._classifier_optimizer = torch.optim.Adam(
-                self._classifier_mlp.parameters(),
+                self.classifier_mlp.parameters(),
                 lr=float(self._classifier_params['mlp_lr']),
                 weight_decay=self._optimization_params['weight_decay'])
 
-            self._classifier_svm = svm.LinearSVC(class_weight='balanced')
-            self._lda = discriminant_analysis.LinearDiscriminantAnalysis(
+            self.classifier_svm = svm.LinearSVC(class_weight='balanced')
+            self.lda = discriminant_analysis.LinearDiscriminantAnalysis(
                 n_components=2, store_covariance=True)
-            self._qda = discriminant_analysis.QuadraticDiscriminantAnalysis(
+            self.qda = discriminant_analysis.QuadraticDiscriminantAnalysis(
                 store_covariance=True)
         else:
             self._classifier_params = None
@@ -345,7 +345,7 @@ class ModelManager(torch.nn.Module):
                 y_gt = list(np.array(data.y)[self._batch_diagonal_idx])
             else:
                 y_gt = data.y
-            y_pred, y_pred_label = self._classifier_mlp(z)
+            y_pred, y_pred_label = self.classifier_mlp(z)
             loss_class, acc_class = self.compute_classification_loss_and_acc(
                 y_pred, y_pred_label, y_gt)
         else:
@@ -615,7 +615,7 @@ class ModelManager(torch.nn.Module):
             if train:
                 self._classifier_optimizer.zero_grad()
 
-            y_pred, y_pred_label = self._classifier_mlp(z.to(self.device))
+            y_pred, y_pred_label = self.classifier_mlp(z.to(self.device))
             loss_class, acc_class = self.compute_classification_loss_and_acc(
                 y_pred, y_pred_label, label)
 
@@ -647,6 +647,9 @@ class ModelManager(torch.nn.Module):
                 writer.add_scalar("train/class_acc", tr_acc, epoch + 1)
                 writer.add_scalar("validation/class_loss", val_loss, epoch + 1)
                 writer.add_scalar("validation/class_acc", val_acc, epoch + 1)
+            accuracy_mlp = self.mlp_classifier_epoch(val_latents_list,
+                                                     val_l_list, False)[1]
+            print(f"MLP validation accuracy = {accuracy_mlp}")
             self.save_classifier(checkpoint_dir, 'mlp')
 
         latents = torch.cat(self._train_latents_list, dim=0).numpy()
@@ -656,31 +659,31 @@ class ModelManager(torch.nn.Module):
         y_gt_val = self.class2idx(np.concatenate(val_l_list['y']))
 
         # SVM
-        self._classifier_svm.fit(latents, y_gt)
-        accuracy_svm = self._classifier_svm.score(latents_val, y_gt_val)
+        self.classifier_svm.fit(latents, y_gt)
+        accuracy_svm = self.classifier_svm.score(latents_val, y_gt_val)
         print(f"SVM validation accuracy = {accuracy_svm}")
         self.save_classifier(checkpoint_dir, 'svm')
 
         # LDA
-        self._lda.fit(latents, y_gt)
-        accuracy_lda = self._lda.score(latents_val, y_gt_val)
+        self.lda.fit(latents, y_gt)
+        accuracy_lda = self.lda.score(latents_val, y_gt_val)
         print(f"LDA validation accuracy = {accuracy_lda}")
         self.save_classifier(checkpoint_dir, 'lda')
 
         # QDA
-        self._qda.fit(latents, y_gt)
-        accuracy_qda = self._qda.score(latents_val, y_gt_val)
+        self.qda.fit(latents, y_gt)
+        accuracy_qda = self.qda.score(latents_val, y_gt_val)
         print(f"QDA validation accuracy = {accuracy_qda}")
         self.save_classifier(checkpoint_dir, 'qda')
 
     def lda_project_latents_in_2d(self, latents):
-        return self._lda.transform(latents)
+        return self.lda.transform(latents)
 
     def qda_sample(self, sample_class='a', n_samples=1):
         if isinstance(sample_class, str):
             sample_class = self.class2idx(sample_class)
-        mean = self._qda.means_[sample_class]
-        cov = self._qda.covariance_[sample_class]
+        mean = self.qda.means_[sample_class]
+        cov = self.qda.covariance_[sample_class]
         return np.random.multivariate_normal(mean, cov, n_samples)
 
     @torch.no_grad()
@@ -689,13 +692,13 @@ class ModelManager(torch.nn.Module):
             model = self._classifier_params['main_model_type']
 
         if model == 'mlp':
-            y_pred = self._classifier_mlp(z.to(self.device)).detach().numpy()
+            y_pred = self.classifier_mlp(z.to(self.device)).detach().numpy()
         elif model == 'svm':
-            y_pred = self._classifier_svm.predict(z.detach().numpy())
+            y_pred = self.classifier_svm.predict(z.detach().numpy())
         elif model == 'lda':
-            y_pred = self._lda.predict(z.detach().numpy())
+            y_pred = self.lda.predict(z.detach().numpy())
         elif model == 'qda':
-            y_pred = self._qda.predict(z.detach().numpy())
+            y_pred = self.qda.predict(z.detach().numpy())
         else:
             raise NotImplementedError
         return self.idx2class(y_pred)
@@ -869,19 +872,19 @@ class ModelManager(torch.nn.Module):
     def save_classifier(self, checkpoint_dir, classifier_type='mlp'):
         if classifier_type == 'mlp':
             net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
-            torch.save({'model': self._classifier_mlp.state_dict()}, net_name)
+            torch.save({'model': self.classifier_mlp.state_dict()}, net_name)
         elif classifier_type == 'svm':
             svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
             with open(svm_name, 'wb') as f:
-                pickle.dump(self._classifier_svm, f)
+                pickle.dump(self.classifier_svm, f)
         elif classifier_type == 'lda':
             lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
             with open(lda_name, 'wb') as f:
-                pickle.dump(self._lda, f)
+                pickle.dump(self.lda, f)
         elif classifier_type == 'qda':
             qda_name = os.path.join(checkpoint_dir, 'qda_classifier.pkl')
             with open(qda_name, 'wb') as f:
-                pickle.dump(self._qda, f)
+                pickle.dump(self.qda, f)
         else:
             raise NotImplementedError
 
@@ -890,19 +893,19 @@ class ModelManager(torch.nn.Module):
             if classifier_type == 'mlp':
                 net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
                 state_dict = torch.load(net_name)
-                self._classifier_mlp.load_state_dict(state_dict['model'])
+                self.classifier_mlp.load_state_dict(state_dict['model'])
             elif classifier_type == 'svm':
                 svm_name = os.path.join(checkpoint_dir, 'svm_classifier.pkl')
                 with open(svm_name, 'rb') as f:
-                    self._classifier_svm = pickle.load(f)
+                    self.classifier_svm = pickle.load(f)
             elif classifier_type == 'lda':
                 lda_name = os.path.join(checkpoint_dir, 'lda_classifier.pkl')
                 with open(lda_name, 'rb') as f:
-                    self._lda = pickle.load(f)
+                    self.lda = pickle.load(f)
             elif classifier_type == 'qda':
                 qda_name = os.path.join(checkpoint_dir, 'qda_classifier.pkl')
                 with open(qda_name, 'rb') as f:
-                    self._qda = pickle.load(f)
+                    self.qda = pickle.load(f)
             else:
                 raise NotImplementedError
         except FileNotFoundError:
