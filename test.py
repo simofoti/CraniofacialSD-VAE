@@ -16,6 +16,8 @@ from pytorch3d.renderer import BlendParams
 from pytorch3d.loss.point_mesh_distance import point_face_distance
 from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
+from sklearn.manifold import TSNE
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 from utils import create_alpha_cmap
@@ -827,14 +829,22 @@ class Tester:
         self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
 
     def plot_embeddings_per_region(self, tr_z_np, tr_y, tr_l):
+        plt.clf()
         per_region_dfs_list = []
         for key, z_region in self._manager.latent_regions.items():
             if z_region[1] - z_region[0] > 2:
                 # TODO: pca? (no lda because supervised)
-                raise NotImplementedError
+                tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
+                z_r_embeddings = LinearDiscriminantAnalysis(
+                    n_components=2, store_covariance=True).fit_transform(
+                    tr_z_np_region, tr_y)
+                x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
+            else:
+                x1 = tr_z_np[:, z_region[0]]
+                x2 = tr_z_np[:, z_region[1] - 1]
+
             per_region_dfs_list.append(pd.DataFrame({
-                'x1': tr_z_np[:, z_region[0]],
-                'x2': tr_z_np[:, z_region[1] - 1],
+                'x1': x1, 'x2': x2,
                 'class': self._manager.idx2class(tr_y),
                 'aug': np.concatenate(tr_l['augmented']),
                 'region': np.array([key] * tr_y.shape[0])
