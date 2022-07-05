@@ -18,9 +18,11 @@ from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
 from sklearn.manifold import TSNE
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.metrics import confusion_matrix
+from sklearn.utils.multiclass import unique_labels
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
-from utils import create_alpha_cmap
+from utils import create_alpha_cmap, plot_confusion_matrix
 
 
 class Tester:
@@ -857,6 +859,52 @@ class Tester:
         g.add_legend()
         plt.savefig(os.path.join(self._out_dir, 'emb_all_train.svg'))
 
+    def test_classifiers(self):
+        ts_z, ts_l = self._manager.encode_all(self._test_loader, False)
+        ts_z_np = torch.cat(ts_z, dim=0).numpy()
+        ts_ly = np.concatenate(ts_l['y'])
+        ts_y = np.array(self._manager.class2idx(ts_ly))
+
+        accuracy_mlp = self._manager.mlp_classifier_epoch(ts_z, ts_l, False)[1]
+        accuracy_svm = self._manager.classifier_svm.score(ts_z_np, ts_y)
+        accuracy_lda = self._manager.lda.score(ts_z_np, ts_y)
+        accuracy_qda = self._manager.qda.score(ts_z_np, ts_y)
+        metrics = {'accuracy_mlp': accuracy_mlp,
+                   'accuracy_svm': accuracy_svm,
+                   'accuracy_lda': accuracy_lda,
+                   'accuracy_qda': accuracy_qda}
+
+        print(metrics)
+        outfile_path = os.path.join(self._out_dir, 'accuracies.json')
+        with open(outfile_path, 'w') as outfile:
+            json.dump(metrics, outfile)
+
+        pred_mlp = torch.cat(
+            [self._manager.classifier_mlp(z.to(self._device))[1] for z in ts_z],
+            dim=0).cpu().detach().numpy()
+        pred_svm = self._manager.classifier_svm.predict(ts_z_np)
+        pred_lda = self._manager.lda.predict(ts_z_np)
+        pred_qda = self._manager.qda.predict(ts_z_np)
+
+        confmat_mlp = confusion_matrix(ts_ly, self._manager.idx2class(pred_mlp),
+                                       normalize='true')
+        confmat_svm = confusion_matrix(ts_ly, self._manager.idx2class(pred_svm),
+                                       normalize='true')
+        confmat_lda = confusion_matrix(ts_ly, self._manager.idx2class(pred_lda),
+                                       normalize='true')
+        confmat_qda = confusion_matrix(ts_ly, self._manager.idx2class(pred_qda),
+                                       normalize='true')
+
+        labels = unique_labels(ts_ly)
+        plot_confusion_matrix(confmat_mlp, labels,
+                              os.path.join(self._out_dir, 'confmat_mlp.svg'))
+        plot_confusion_matrix(confmat_svm, labels,
+                              os.path.join(self._out_dir, 'confmat_svm.svg'))
+        plot_confusion_matrix(confmat_lda, labels,
+                              os.path.join(self._out_dir, 'confmat_lda.svg'))
+        plot_confusion_matrix(confmat_qda, labels,
+                              os.path.join(self._out_dir, 'confmat_qda.svg'))
+
 
 if __name__ == '__main__':
     import argparse
@@ -889,7 +937,7 @@ if __name__ == '__main__':
         precomputed_storage_path=configurations['data']['precomputed_path'])
     manager.resume(checkpoint_dir)
 
-    train_loader, _, test_loader, normalization_dict, d_classes = \
+    train_loader, val_loader, test_loader, normalization_dict, d_classes = \
         get_data_loaders(configurations, manager.template)
 
     manager.set_class_conversions_and_weights(d_classes)
@@ -897,10 +945,12 @@ if __name__ == '__main__':
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)
 
-    tester()
+    # tester()
+    tester.test_classifiers()
+    # tester.plot_embeddings(embedding_mode='lda')
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
-    # tester.set_renderings_size(512)
+    # tester.set_renderings_size(256)
     # tester.set_rendering_background_color()
     # tester.interpolate()
     # tester.latent_swapping(next(iter(test_loader)).x)

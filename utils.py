@@ -8,6 +8,8 @@ import torch_geometric.transforms
 
 import networkx as nx
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
 from collections import Counter
 from torch_geometric.data import Data
 from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix
@@ -268,3 +270,16 @@ def get_gaussian_ellipse(mean, covariance, color, n_sigma=3):
                   180 + angle, facecolor=color, edgecolor=color, linewidth=2)
     ell.set_alpha(0.2)
     return ell
+
+
+def plot_confusion_matrix(data, labels, output_filename):
+    sns.set(color_codes=True)
+    ax = sns.heatmap(data, annot=True, cmap="YlGnBu")
+
+    ax.set_xticklabels(labels)
+    ax.set_yticklabels(labels)
+
+    ax.set(ylabel="True Label", xlabel="Predicted Label")
+
+    plt.savefig(output_filename, bbox_inches='tight', dpi=300)
+    plt.close()
