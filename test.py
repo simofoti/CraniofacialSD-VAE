@@ -47,14 +47,15 @@ class Tester:
             1255, 9881, 32055, 45778, 5355, 27515, 18482, 33691]
 
     def __call__(self):
-        self.set_renderings_size(512)
+        self.set_renderings_size(256)
         self.set_rendering_background_color([1, 1, 1])
 
         # Qualitative evaluations
+        sns.set_theme(style="ticks")
+        self.per_variable_range_experiments(use_z_stats=False)
         self.plot_embeddings()
         if self._config['data']['swap_features']:
             self.latent_swapping(next(iter(self._test_loader)).x)
-        self.per_variable_range_experiments(use_z_stats=False)
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
         self.interpolate()
@@ -124,7 +125,7 @@ class Tester:
         return tuple(colors)
 
     def per_variable_range_experiments(self, z_range_multiplier=1,
-                                       use_z_stats=True):
+                                       use_z_stats=True, save_suffix=None):
         if self._is_vae and not use_z_stats:
             latent_size = self._manager.model_latent_size
             z_means = torch.zeros(latent_size)
@@ -165,8 +166,9 @@ class Tester:
             all_frames.append(
                 torch.cat([frames, torch.zeros_like(frames)[:2, ::]]))
 
+        s = save_suffix if save_suffix is not None else ''
         write_video(
-            os.path.join(self._out_dir, 'latent_exploration.mp4'),
+            os.path.join(self._out_dir, f'latent_exploration{s}.mp4'),
             torch.cat(all_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
 
         # Same video as before, but effects of perturbing each latent variables
@@ -183,9 +185,10 @@ class Tester:
                 make_grid(stacked_frames[:, i, ::], padding=10,
                           pad_value=1, nrow=grid_nrows))
         save_image(grid_frames[-1],
-                   os.path.join(self._out_dir, 'latent_exploration_tiled.png'))
+                   os.path.join(self._out_dir,
+                                f'latent_exploration_tiled{s}.png'))
         write_video(
-            os.path.join(self._out_dir, 'latent_exploration_tiled.mp4'),
+            os.path.join(self._out_dir, f'latent_exploration_tiled{s}.mp4'),
             torch.stack(grid_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=1)
 
         # Same as before, but only output meshes are used
@@ -196,7 +199,7 @@ class Tester:
                 make_grid(stacked_frames_meshes[:, i, ::], padding=10,
                           pad_value=1, nrow=grid_nrows))
         write_video(
-            os.path.join(self._out_dir, 'latent_exploration_outs_tiled.mp4'),
+            os.path.join(self._out_dir, f'latent_exploration_out_tiled{s}.mp4'),
             torch.stack(grid_frames_m, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
 
         # Create a plot showing the effects of perturbing latent variables in
@@ -217,11 +220,12 @@ class Tester:
                              col_wrap=4, height=3)
 
         grid.map(plt.plot, "z_var", "mean_dist", marker="o")
-        plt.savefig(os.path.join(self._out_dir, 'latent_exploration_split.svg'))
+        plt.savefig(os.path.join(self._out_dir,
+                                 f'latent_exploration_split{s}.svg'))
 
         sns.relplot(data=df, kind="line", x="z_var", y="mean_dist",
                     hue="region", palette=palette)
-        plt.savefig(os.path.join(self._out_dir, 'latent_exploration.svg'))
+        plt.savefig(os.path.join(self._out_dir, f'latent_exploration{s}.svg'))
 
     def random_latent(self, n_samples, z_range_multiplier=1):
         if self._is_vae:  # sample from normal distribution if vae
@@ -858,8 +862,10 @@ if __name__ == '__main__':
         precomputed_storage_path=configurations['data']['precomputed_path'])
     manager.resume(checkpoint_dir)
 
-    train_loader, _, test_loader, normalization_dict = \
+    train_loader, _, test_loader, normalization_dict, d_classes = \
         get_data_loaders(configurations, manager.template)
+
+    manager.set_class_conversions_and_weights(d_classes)
 
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)

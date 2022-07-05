@@ -59,6 +59,9 @@ validation_visualization_batch = next(iter(validation_loader))
 manager.set_class_conversions_and_weights(d_classes)
 # manager.render_and_show_batch(train_visualization_batch, normalization_dict)
 
+tester = Tester(manager, normalization_dict, train_loader,
+                validation_loader, output_directory, config)
+
 if opts.resume:
     start_epoch = manager.resume(checkpoint_dir)
 else:
@@ -78,6 +81,8 @@ for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
                            normalization_dict, 'validation', error_max_scale=2)
     if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
         manager.save_weights(checkpoint_dir, epoch)
+        tester.per_variable_range_experiments(use_z_stats=False,
+                                              save_suffix=str(epoch + 1))
 
 if manager.is_rae:
     manager.fit_gaussian_mixture(train_loader)
@@ -85,5 +90,5 @@ if manager.is_rae:
 manager.train_and_validate_classifiers(train_loader, validation_loader,
                                        writer, checkpoint_dir)
 
-Tester(manager, normalization_dict, train_loader, test_loader,
-       output_directory, config)()
+tester.compute_latent_stats(train_loader)
+tester()
