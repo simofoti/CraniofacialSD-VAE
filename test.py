@@ -751,7 +751,7 @@ class Tester:
         res = torch.stack(ls)
         return res.t()
 
-    def plot_embeddings(self):
+    def plot_embeddings(self, embedding_mode='lda'):
         tr_z, tr_l = self._manager.train_latents_and_labels
         if tr_z is None:
             tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
@@ -761,12 +761,21 @@ class Tester:
 
         tr_z_np = torch.cat(tr_z, dim=0).numpy()
         ts_z_np = torch.cat(ts_z, dim=0).numpy()
-        tr_z_np_2d = self._manager.lda_project_latents_in_2d(tr_z_np)
-        ts_z_np_2d = self._manager.lda_project_latents_in_2d(ts_z_np)
+
+        if embedding_mode == 'lda':
+            tr_z_np_2d = self._manager.lda_project_latents_in_2d(tr_z_np)
+            ts_z_np_2d = self._manager.lda_project_latents_in_2d(ts_z_np)
+            x1 = np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 0]
+            x2 = np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 1]
+        elif embedding_mode == 'tsne':
+            z_np = np.concatenate([tr_z_np, ts_z_np])
+            z_embedded = TSNE(n_components=2, init='random').fit_transform(z_np)
+            x1, x2 = z_embedded[:, 0], z_embedded[:, 1]
+        else:
+            raise NotImplementedError
 
         df = pd.DataFrame({
-            'x1': np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 0],
-            'x2': np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 1],
+            'x1': x1, 'x2': x2,
             'class': self._manager.idx2class(np.concatenate([tr_y, ts_y])),
             'type': ['train'] * tr_y.shape[0] + ['test'] * ts_y.shape[0],
             'aug': np.concatenate([np.concatenate(tr_l['augmented']),
@@ -774,22 +783,30 @@ class Tester:
         })
 
         # TRAIN vs TEST
+        plt.clf()
         sns.scatterplot(data=df, x='x1', y='x2', hue='class', style='type')
-        plt.show()
+        plt.savefig(os.path.join(self._out_dir,
+                                 embedding_mode + '_emb_train_vs_test.svg'))
 
         # TRAIN REAL vs TRAIN AUG
+        plt.clf()
         sns.scatterplot(data=df.loc[df['type'] == 'train'],
                         x='x1', y='x2', hue='class', style='aug')
-        plt.show()
+        plt.savefig(os.path.join(self._out_dir,
+                                 embedding_mode + '_emb_real_vs_aug.svg'))
 
         # TRAIN REAL vs TRAIN AUG, distributions on real
+        plt.clf()
         sns.kdeplot(data=df.loc[(df['type'] == 'train') & (~df['aug'])],
                     x='x1', y='x2', hue='class', fill=True)
         sns.scatterplot(data=df.loc[df['aug']],
                         x='x1', y='x2', hue='class')
-        plt.show()
+        plt.savefig(
+            os.path.join(self._out_dir,
+                         embedding_mode + '_emb_real_dist_vs_sc_aug.svg'))
 
         # TRAIN REAL, trying to shade and blend distributions
+        plt.clf()
         cmaps = [create_alpha_cmap(c) for c in ['coral', 'teal', 'royalblue',
                                                 'mediumseagreen', 'orchid']]
 
@@ -804,11 +821,10 @@ class Tester:
                             (df['class'] == self._manager.idx2class(c))],
                 x='x1', y='x2', levels=5, color="w", linewidths=1
             )
-        plt.show()
+        plt.savefig(os.path.join(self._out_dir,
+                                 embedding_mode + '_emb_distributions.svg'))
 
         self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
-
-        print('lpot')
 
     def plot_embeddings_per_region(self, tr_z_np, tr_y, tr_l):
         per_region_dfs_list = []
@@ -828,7 +844,8 @@ class Tester:
         # also augmented data are scattered
         g = sns.FacetGrid(df, col='region', col_wrap=6, height=2)
         g.map(sns.scatterplot, 'x1', 'x2', 'class', s=10)
-        plt.show()
+        g.add_legend()
+        plt.savefig(os.path.join(self._out_dir, 'emb_all_train.svg'))
 
 
 if __name__ == '__main__':
