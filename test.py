@@ -835,7 +835,6 @@ class Tester:
         per_region_dfs_list = []
         for key, z_region in self._manager.latent_regions.items():
             if z_region[1] - z_region[0] > 2:
-                # TODO: pca? (no lda because supervised)
                 tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
                 z_r_embeddings = LinearDiscriminantAnalysis(
                     n_components=2, store_covariance=True).fit_transform(
@@ -854,7 +853,7 @@ class Tester:
         df = pd.concat(per_region_dfs_list)
 
         # also augmented data are scattered
-        g = sns.FacetGrid(df, col='region', col_wrap=6, height=2)
+        g = sns.FacetGrid(df, col='region', col_wrap=5, height=2)
         g.map(sns.scatterplot, 'x1', 'x2', 'class', s=10)
         g.add_legend()
         plt.savefig(os.path.join(self._out_dir, 'emb_all_train.svg'))
@@ -904,6 +903,43 @@ class Tester:
                               os.path.join(self._out_dir, 'confmat_lda.svg'))
         plot_confusion_matrix(confmat_qda, labels,
                               os.path.join(self._out_dir, 'confmat_qda.svg'))
+
+        self.confusion_matrices_per_region(ts_z_np, ts_ly)
+
+    def confusion_matrices_per_region(self, ts_z_np, ts_ly):
+        tr_z, tr_l = self._manager.train_latents_and_labels
+        if tr_z is None:
+            tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
+        tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
+        tr_z_np = torch.cat(tr_z, dim=0).numpy()
+
+        plt.clf()
+        confusion_matrices = {}
+        for key, z_region in self._manager.latent_regions.items():
+            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
+            r_lda = LinearDiscriminantAnalysis(
+                n_components=2, store_covariance=True).fit(tr_z_np_region, tr_y)
+            pred_r_lda = r_lda.predict(ts_z_np[:, z_region[0]:z_region[1]])
+            confmat_r_lda = confusion_matrix(
+                ts_ly, self._manager.idx2class(pred_r_lda), normalize='true')
+            confusion_matrices[key] = confmat_r_lda
+
+        sns.set(color_codes=True)
+        labels = unique_labels(ts_ly)
+        n_cols = 5
+        n_regions = len(confusion_matrices.keys())
+        n_rows = n_regions // n_cols + (n_regions % n_cols > 0)
+        plt.figure(figsize=(7.5 * n_cols, 6 * n_rows))
+        for n, (region, cf) in enumerate(confusion_matrices.items()):
+            ax = plt.subplot(n_rows, n_cols, n + 1)
+            g = sns.heatmap(cf, annot=True, cmap="YlGnBu", ax=ax)
+            g.set_title(region)
+            g.set_xticklabels(labels)
+            g.set_yticklabels(labels)
+            g.set(ylabel="True Label", xlabel="Predicted Label")
+        plt.tight_layout()
+        plt.savefig(os.path.join(self._out_dir, 'region_confmats_lda.svg'),
+                    bbox_inches='tight')
 
 
 if __name__ == '__main__':
