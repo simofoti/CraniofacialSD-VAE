@@ -704,6 +704,7 @@ class ModelManager(torch.nn.Module):
         return self.idx2class(y_pred)
 
     def set_class_conversions_and_weights(self, data_c_and_w):
+        data_c_and_w['b'] = data_c_and_w.pop('b')  # b always last
         self._class2idx_dict = {k: i for i, k in enumerate(data_c_and_w.keys())}
         idx2class = {v: k for k, v in self._class2idx_dict.items()}
         n_classes = len(data_c_and_w.keys())
