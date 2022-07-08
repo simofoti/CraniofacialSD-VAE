@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from torchvision.io import write_video
 from torchvision.utils import make_grid, save_image
 from pytorch3d.renderer import BlendParams
@@ -17,7 +18,8 @@ from pytorch3d.loss.point_mesh_distance import point_face_distance
 from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
 from sklearn.manifold import TSNE
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.discriminant_analysis import \
+    LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.metrics import confusion_matrix
 from sklearn.utils.multiclass import unique_labels
 
@@ -62,11 +64,12 @@ class Tester:
             self.latent_swapping(next(iter(self._test_loader)).x)
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
-        self.interpolate()
-        if self._config['data']['dataset_type'] == 'faces':
-            self.direct_manipulation()
+        # self.interpolate()
+        # if self._config['data']['dataset_type'] == 'faces':
+        #     self.direct_manipulation()
 
         # Quantitative evaluation
+        self.test_classifiers()
         self.evaluate_gen(self._test_loader, n_sampled_points=2048)
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
@@ -786,45 +789,62 @@ class Tester:
                                   np.concatenate(ts_l['augmented'])])
         })
 
+        colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81']
+        hue_order = ['n', 'a', 'c', 'm']
         # TRAIN vs TEST
         plt.clf()
-        sns.scatterplot(data=df, x='x1', y='x2', hue='class', style='type')
+        sns.scatterplot(data=df, x='x1', y='x2', hue='class', style='type',
+                        hue_order=hue_order, palette=colours)
         plt.savefig(os.path.join(self._out_dir,
                                  embedding_mode + '_emb_train_vs_test.svg'))
 
         # TRAIN REAL vs TRAIN AUG
         plt.clf()
         sns.scatterplot(data=df.loc[df['type'] == 'train'],
-                        x='x1', y='x2', hue='class', style='aug')
+                        x='x1', y='x2', hue='class', style='aug',
+                        hue_order=hue_order, palette=colours)
         plt.savefig(os.path.join(self._out_dir,
                                  embedding_mode + '_emb_real_vs_aug.svg'))
+
+        plt.clf()
+        sns.scatterplot(data=df.loc[df['aug']],
+                        x='x1', y='x2', hue='class', marker='x',
+                        hue_order=hue_order, palette=colours,)
+        sns.scatterplot(data=df.loc[~df['aug']],
+                        x='x1', y='x2', hue='class',
+                        hue_order=hue_order, palette=colours)
+        plt.savefig(os.path.join(self._out_dir,
+                                 embedding_mode + '_emb_real_vs_aug2.svg'))
 
         # TRAIN REAL vs TRAIN AUG, distributions on real
         plt.clf()
         sns.kdeplot(data=df.loc[(df['type'] == 'train') & (~df['aug'])],
-                    x='x1', y='x2', hue='class', fill=True)
+                    x='x1', y='x2', hue='class', fill=True,
+                    hue_order=hue_order, palette=colours)
         sns.scatterplot(data=df.loc[df['aug']],
-                        x='x1', y='x2', hue='class')
+                        x='x1', y='x2', hue='class',
+                        hue_order=hue_order, palette=colours)
         plt.savefig(
             os.path.join(self._out_dir,
                          embedding_mode + '_emb_real_dist_vs_sc_aug.svg'))
 
         # TRAIN REAL, trying to shade and blend distributions
         plt.clf()
-        cmaps = [create_alpha_cmap(c) for c in ['coral', 'teal', 'royalblue',
-                                                'mediumseagreen', 'orchid']]
-
-        for c, cmap in zip(set(tr_y), cmaps):
+        cmaps = [create_alpha_cmap(c) for c in colours]
+        handles = []
+        for c, cmap, col in zip(hue_order, cmaps, colours):
             sns.kdeplot(
                 data=df.loc[(df['type'] == 'train') & (~df['aug']) &
-                            (df['class'] == self._manager.idx2class(c))],
-                x='x1', y='x2', fill=True, thresh=0, levels=256, cmap=cmap
+                            (df['class'] == c)],
+                x='x1', y='x2', fill=True, levels=5, cmap=cmap, alpha=0.8
             )
             sns.kdeplot(
                 data=df.loc[(df['type'] == 'train') & (~df['aug']) &
-                            (df['class'] == self._manager.idx2class(c))],
-                x='x1', y='x2', levels=5, color="w", linewidths=1
+                            (df['class'] == c)],
+                x='x1', y='x2', levels=5, color=col, linewidths=0.5, alpha=0.5
             )
+            handles.append(mpatches.Patch(facecolor=col, label=c))
+        plt.legend(handles=handles)
         plt.savefig(os.path.join(self._out_dir,
                                  embedding_mode + '_emb_distributions.svg'))
 
@@ -851,14 +871,30 @@ class Tester:
                 'region': np.array([key] * tr_y.shape[0])
             }))
         df = pd.concat(per_region_dfs_list)
+        df.drop(df[df['aug']].index, inplace=True)
 
+        colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81', '#dbcbbe']
+        hue_order = ['n', 'a', 'c', 'm']
         # also augmented data are scattered
-        g = sns.FacetGrid(df, col='region', col_wrap=5, height=2)
-        g.map(sns.scatterplot, 'x1', 'x2', 'class', s=10)
+        g = sns.FacetGrid(df, col='region', hue='class', palette=colours,
+                          hue_order=hue_order, col_wrap=5, height=2)
+        g.map(sns.scatterplot, 'x1', 'x2', s=10)
+        g.set_titles(col_template="{col_name}")
         g.add_legend()
         plt.savefig(os.path.join(self._out_dir, 'emb_all_train.svg'))
 
+        # plot distribs
+        g = sns.FacetGrid(df, col='region', hue='class', palette=colours,
+                          hue_order=hue_order, col_wrap=5, height=2)
+        g.map(sns.kdeplot, 'x1', 'x2', fill=False, levels=1, alpha=0.8,
+              thresh=0.5)
+        g.set_titles(col_template="{col_name}")
+        g.add_legend()
+        plt.savefig(os.path.join(self._out_dir, 'emb_all_train_dist.svg'))
+
     def test_classifiers(self):
+        plt.clf()
+        plt.close()
         ts_z, ts_l = self._manager.encode_all(self._test_loader, False)
         ts_z_np = torch.cat(ts_z, dim=0).numpy()
         ts_ly = np.concatenate(ts_l['y'])
@@ -913,8 +949,7 @@ class Tester:
         tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
         tr_z_np = torch.cat(tr_z, dim=0).numpy()
 
-        plt.clf()
-        confusion_matrices = {}
+        confusion_matrices_lda = {}
         for key, z_region in self._manager.latent_regions.items():
             tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
             r_lda = LinearDiscriminantAnalysis(
@@ -922,24 +957,38 @@ class Tester:
             pred_r_lda = r_lda.predict(ts_z_np[:, z_region[0]:z_region[1]])
             confmat_r_lda = confusion_matrix(
                 ts_ly, self._manager.idx2class(pred_r_lda), normalize='true')
-            confusion_matrices[key] = confmat_r_lda
+            confusion_matrices_lda[key] = confmat_r_lda
 
-        sns.set(color_codes=True)
-        labels = unique_labels(ts_ly)
-        n_cols = 5
-        n_regions = len(confusion_matrices.keys())
-        n_rows = n_regions // n_cols + (n_regions % n_cols > 0)
-        plt.figure(figsize=(7.5 * n_cols, 6 * n_rows))
-        for n, (region, cf) in enumerate(confusion_matrices.items()):
-            ax = plt.subplot(n_rows, n_cols, n + 1)
-            g = sns.heatmap(cf, annot=True, cmap="YlGnBu", ax=ax)
-            g.set_title(region)
-            g.set_xticklabels(labels)
-            g.set_yticklabels(labels)
-            g.set(ylabel="True Label", xlabel="Predicted Label")
-        plt.tight_layout()
-        plt.savefig(os.path.join(self._out_dir, 'region_confmats_lda.svg'),
-                    bbox_inches='tight')
+        confusion_matrices_qda = {}
+        for key, z_region in self._manager.latent_regions.items():
+            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
+            r_qda = QuadraticDiscriminantAnalysis(
+                store_covariance=True).fit(tr_z_np_region, tr_y)
+            pred_r_qda = r_qda.predict(ts_z_np[:, z_region[0]:z_region[1]])
+            confmat_r_qda = confusion_matrix(
+                ts_ly, self._manager.idx2class(pred_r_qda), normalize='true')
+            confusion_matrices_qda[key] = confmat_r_qda
+
+        cms = [confusion_matrices_lda, confusion_matrices_qda]
+        for m, confusion_matrices in zip(['lda', 'qda'], cms):
+            plt.clf()
+            sns.set(color_codes=True)
+            labels = unique_labels(ts_ly)
+            n_cols = 5
+            n_regions = len(confusion_matrices.keys())
+            n_rows = n_regions // n_cols + (n_regions % n_cols > 0)
+            plt.figure(figsize=(7.5 * n_cols, 6 * n_rows))
+            for n, (region, cf) in enumerate(confusion_matrices.items()):
+                ax = plt.subplot(n_rows, n_cols, n + 1)
+                g = sns.heatmap(cf, annot=True, cmap="YlGnBu", ax=ax,
+                                vmin=0., vmax=1.)
+                g.set_title(region)
+                g.set_xticklabels(labels)
+                g.set_yticklabels(labels)
+                g.set(ylabel="True Label", xlabel="Predicted Label")
+            plt.tight_layout()
+            plt.savefig(os.path.join(self._out_dir, f"region_confmats_{m}.svg"),
+                        bbox_inches='tight')
 
 
 if __name__ == '__main__':

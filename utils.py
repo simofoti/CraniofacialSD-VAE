@@ -274,7 +274,7 @@ def get_gaussian_ellipse(mean, covariance, color, n_sigma=3):
 
 def plot_confusion_matrix(data, labels, output_filename):
     sns.set(color_codes=True)
-    ax = sns.heatmap(data, annot=True, cmap="YlGnBu")
+    ax = sns.heatmap(data, annot=True, cmap="YlGnBu", vmin=0., vmax=1.)
 
     ax.set_xticklabels(labels)
     ax.set_yticklabels(labels)
