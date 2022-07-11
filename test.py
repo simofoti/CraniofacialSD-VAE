@@ -658,17 +658,19 @@ class Tester:
             sphere.export(os.path.join(out_mesh_dir, f'selected_{i}.ply'))
 
     def interpolate(self):
-        with open(os.path.join('precomputed', 'data_split.json'), 'r') as fp:
+        with open(os.path.join('precomputed_craniofacial',
+                               'data_split.json'), 'r') as fp:
             data = json.load(fp)
         test_list = data['test']
+        test_list = [n for n in test_list if 'aug' not in n]
         meshes_root = self._test_loader.dataset.root
 
         # Pick first test mesh and find most different mesh in test set
         v_1 = None
         distances = [0]
         for i, fname in enumerate(test_list):
-            mesh_path = os.path.join(meshes_root, fname + '.ply')
-            mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
+            mesh_path = os.path.join(meshes_root, fname)
+            mesh = trimesh.load_mesh(mesh_path, 'obj', process=False)
             mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
                                       requires_grad=False, device='cpu')
             if i == 0:
@@ -678,8 +680,8 @@ class Tester:
                     self._manager.compute_mse_loss(v_1, mesh_verts).item())
 
         m_2_path = os.path.join(
-            meshes_root, test_list[np.asarray(distances).argmax()] + '.ply')
-        m_2 = trimesh.load_mesh(m_2_path, 'ply', process=False)
+            meshes_root, test_list[np.asarray(distances).argmax()])
+        m_2 = trimesh.load_mesh(m_2_path, 'obj', process=False)
         v_2 = torch.tensor(m_2.vertices, dtype=torch.float, requires_grad=False)
 
         v_1 = (v_1 - self._norm_dict['mean']) / self._norm_dict['std']
