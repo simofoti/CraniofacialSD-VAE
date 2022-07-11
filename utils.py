@@ -235,7 +235,7 @@ def spectral_interpolation(x1, x2, eigendec):
     s1 = u.T @ x1
     s2 = u.T @ x2
 
-    values = np.random.uniform(size=[s1.shape[0], 1])
+    values = np.random.normal(loc=0.5, scale=0.5, size=[s1.shape[0], 1])
     s3 = s1 + values * (s2 - s1)
 
     interp_until = 30
