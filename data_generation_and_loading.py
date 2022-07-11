@@ -158,166 +158,6 @@ class MeshCollater:
         return batched_data
 
 
-class MeshDataset(Dataset):
-    def __init__(self, root, data_config, dataset_type='train',
-                 transform=None, pre_transform=None, template=None):
-        self._root = root
-        self._dataset_summary = get_dataset_summary(
-            data_config, data_config['data_type'])
-        self._data_to_use = find_data_used_from_summary(
-            self._dataset_summary, data_config['data_type'])
-
-        self._precomputed_storage_path = data_config['precomputed_path']
-        if not os.path.isdir(self._precomputed_storage_path):
-            os.mkdir(self._precomputed_storage_path)
-
-        if 'stratified_split' in data_config:
-            self._stratified_split = data_config['stratified_split']
-        else:
-            self._stratified_split = False
-
-        self._dataset_type = dataset_type
-        self._normalize = data_config['normalize_data']
-        self._template = template
-
-        self._train_names, self._test_names, self._val_names = self.split_data(
-            os.path.join(self._precomputed_storage_path, 'data_split.json'))
-
-        self._processed_files = [f + '.pt' for f in self.raw_file_names]
-
-        normalization_dict = self.compute_mean_and_std()
-        self._normalization_dict = normalization_dict
-        self.mean = normalization_dict['mean']
-        self.std = normalization_dict['std']
-        super(MeshDataset, self).__init__(root, transform, pre_transform)
-
-    @property
-    def raw_file_names(self):
-        if self._dataset_type == 'train':
-            file_names = self._train_names
-        elif self._dataset_type == 'test':
-            file_names = self._test_names
-        elif self._dataset_type == 'val':
-            file_names = self._val_names
-        else:
-            raise Exception("train, val and test are supported dataset types")
-        return file_names
-
-    @property
-    def processed_file_names(self):
-        return self._processed_files
-
-    @property
-    def normalization_dict(self):
-        return self._normalization_dict
-
-    def download(self):
-        pass
-
-    def find_filenames(self):
-        files = []
-        for dirpath, _, fnames in os.walk(self._root):
-            for f in fnames:
-                if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
-                    if self._data_to_use is None:
-                        files.append(f)
-                    elif f[:-4] in self._data_to_use:
-                        files.append(f)
-        return files
-
-    def split_data(self, data_split_list_path):
-        try:
-            with open(data_split_list_path, 'r') as fp:
-                data = json.load(fp)
-            train_list = data['train']
-            test_list = data['test']
-            val_list = data['val']
-        except FileNotFoundError:
-            all_file_names = self.find_filenames()
-            all_file_names.sort()
-
-            if self._stratified_split:
-                y = [name[0] for name in all_file_names]
-                train_list, test, _, test_y = train_test_split(
-                    all_file_names, y, stratify=y, test_size=0.2)
-                test_list, val_list, _, _ = train_test_split(
-                    test, test_y, stratify=test_y, test_size=0.5)
-            else:
-                train_list, test_list, val_list = [], [], []
-                for i, fname in enumerate(all_file_names):
-                    if i % 100 <= 5:
-                        test_list.append(fname)
-                    elif i % 100 <= 10:
-                        val_list.append(fname)
-                    else:
-                        train_list.append(fname)
-
-            data = {'train': train_list, 'test': test_list, 'val': val_list}
-            with open(data_split_list_path, 'w') as fp:
-                json.dump(data, fp)
-        return train_list, test_list, val_list
-
-    def load_mesh(self, filename):
-        mesh_path = os.path.join(self._root, filename)
-        mesh = trimesh.load_mesh(mesh_path, process=False)
-        mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
-                                  requires_grad=False)
-        return mesh_verts
-
-    def compute_mean_and_std(self):
-        normalization_dict_path = os.path.join(
-            self._precomputed_storage_path, 'norm.pt')
-        try:
-            normalization_dict = torch.load(normalization_dict_path)
-        except FileNotFoundError:
-            assert self._dataset_type == 'train'
-            train_verts = None
-            for i, fname in tqdm.tqdm(enumerate(self._train_names)):
-                mesh_verts = self.load_mesh(fname)
-                if i == 0:
-                    train_verts = torch.zeros(
-                        [len(self._train_names), mesh_verts.shape[0], 3],
-                        requires_grad=False)
-                train_verts[i, ::] = mesh_verts
-
-            mean = torch.mean(train_verts, dim=0)
-            std = torch.std(train_verts, dim=0)
-            std = torch.where(std > 0, std, torch.tensor(1e-8))
-            normalization_dict = {'mean': mean, 'std': std}
-            torch.save(normalization_dict, normalization_dict_path)
-        return normalization_dict
-
-    def process(self):
-        for i, fname in tqdm.tqdm(enumerate(self.raw_file_names)):
-            mesh_verts = self.load_mesh(fname)
-
-            if self._normalize:
-                mesh_verts = (mesh_verts - self.mean) / self.std
-
-            y = fname.split('/')[1][0] if '/' in fname else fname[0]
-            data = Data(x=mesh_verts, y=y, augmented=('aug' in fname))
-
-            if self.pre_transform is not None:
-                data = self.pre_transform(data)
-            torch.save(data, os.path.join(self.processed_dir,
-                                          fname[:-4] + '.pt'))
-
-    def get(self, idx):
-        filename = self.raw_file_names[idx]
-        return torch.load(os.path.join(self.processed_dir,
-                                       filename[:-4] + '.pt'))
-
-    def len(self):
-        return len(self.processed_file_names)
-
-    def save_mean_mesh(self):
-        first_mesh_path = os.path.join(self._root, self._train_names[0])
-        first_mesh = trimesh.load_mesh(first_mesh_path, process=False)
-        first_mesh.vertices = self.mean.detach().cpu().numpy()
-        first_mesh.export(
-            os.path.join(self._precomputed_storage_path, 'mean.ply'))
-
-
 class MeshInMemoryDataset(InMemoryDataset):
     def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
@@ -341,6 +181,12 @@ class MeshInMemoryDataset(InMemoryDataset):
         self._normalize = data_config['normalize_data']
         self._template = template
 
+        augmentation_factor = data_config['augmentation_factor']
+        if augmentation_factor > 0:
+            self._augment(mode=data_config['augmentation_mode'],
+                          aug_factor=augmentation_factor,
+                          balanced=data_config['augmentation_balanced'])
+
         self._train_names, self._test_names, self._val_names = self.split_data(
             os.path.join(self._precomputed_storage_path, 'data_split.json'))
 
@@ -348,12 +194,6 @@ class MeshInMemoryDataset(InMemoryDataset):
         self._normalization_dict = normalization_dict
         self.mean = normalization_dict['mean']
         self.std = normalization_dict['std']
-
-        augmentation_factor = data_config['augmentation_factor']
-        if dataset_type == 'train' and augmentation_factor > 0:
-            self._augment(mode=data_config['augmentation_mode'],
-                          aug_factor=augmentation_factor,
-                          balanced=data_config['augmentation_balanced'])
 
         super(MeshInMemoryDataset, self).__init__(
             root, transform, pre_transform)
@@ -403,15 +243,18 @@ class MeshInMemoryDataset(InMemoryDataset):
     def download(self):
         pass
 
-    def find_filenames(self):
+    def find_filenames(self, find_augmented=True):
         files = []
         for dirpath, _, fnames in os.walk(self._root):
             for f in fnames:
-                if f.endswith('.ply') or f.endswith('.obj') and 'aug' not in f:
-                    if self._data_to_use is None:
-                        files.append(f)
-                    elif f[:-4] in self._data_to_use:
-                        files.append(f)
+                if f.endswith('.ply') or f.endswith('.obj'):
+                    if 'aug' not in dirpath:
+                        if self._data_to_use is None:
+                            files.append(f)
+                        elif f[:-4] in self._data_to_use:
+                            files.append(f)
+                    elif find_augmented:  # data augmented only with data_to_use
+                        files.append(os.path.join('augmented', f))
         return files
 
     def split_data(self, data_split_list_path):
@@ -422,7 +265,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             test_list = data['test']
             val_list = data['val']
         except FileNotFoundError:
-            all_file_names = self.find_filenames()
+            all_file_names = self.find_filenames(find_augmented=True)
             all_file_names.sort()
 
             if self._stratified_split:
@@ -524,20 +367,21 @@ class MeshInMemoryDataset(InMemoryDataset):
         if os.path.isdir(augmented_dir) and os.listdir(augmented_dir):
             aug_names = os.listdir(augmented_dir)
             n_aug_per_class = {cl: 0 for cl in set([n[0] for n in aug_names])}
-            for name in aug_names:
-                if name.endswith('.obj') or name.endswith('.ply'):
-                    self._train_names.append(os.path.join('augmented', name))
-                    n_aug_per_class[name[0]] += 1
-            print(f"Found data previously augmented. Using {n_aug_per_class}")
+            if self._data_type == 'train':
+                for name in aug_names:
+                    if name.endswith('.obj') or name.endswith('.ply'):
+                        n_aug_per_class[name[0]] += 1
+                print(f"Found data previously augmented -> {n_aug_per_class}")
         else:
+            initial_list = self.find_filenames(find_augmented=False)
+
             if mode == 'spectral_comb' or mode == 'spectral_interp':
-                self._spectral_projections_analysis(k=30)
+                self._spectral_projections_analysis(initial_list, k=30)
                 eigd = compute_laplacian_eigendecomposition(
                     self._template, k=1000)
             else:
                 eigd = None
 
-            initial_list = self._train_names.copy()
             data_classes = set([name[0] for name in initial_list])
             paths_age_gender_per_class = {cl: [] for cl in data_classes}
             for name in initial_list:
@@ -597,10 +441,9 @@ class MeshInMemoryDataset(InMemoryDataset):
 
                     aug_name = name1[:-4] + '_' + name2[2:-4] + aug + name1[-4:]
                     mesh1.export(os.path.join(augmented_dir, aug_name))
-                    self._train_names.append(
-                        os.path.join('augmented', aug_name))
 
-    def _spectral_projections_analysis(self, k=200, plot_type='scatter'):
+    def _spectral_projections_analysis(self, filenames, k=200,
+                                       plot_type='scatter'):
         import matplotlib.pyplot as plt
         import seaborn as sns
         from matplotlib.colors import Normalize
@@ -614,13 +457,13 @@ class MeshInMemoryDataset(InMemoryDataset):
 
         s, u = compute_laplacian_eigendecomposition(self._template, k=k)
         spectral_proj_template = u.T @ self._template.pos.detach().cpu().numpy()
-        data_classes = set([name[0] for name in self._train_names])
+        data_classes = set([name[0] for name in filenames])
 
         sns.set_theme(style="ticks")
         fig, axs = plt.subplots(len(data_classes), 3, figsize=(10, 10))
 
         for c_i, c in enumerate(data_classes):
-            for name in self._train_names:
+            for name in filenames:
                 if name[0] == c:
                     path = os.path.join(self._root, name)
                     age, gender = get_age_and_gender_from_summary(
@@ -639,6 +482,8 @@ class MeshInMemoryDataset(InMemoryDataset):
 
                     # line_colour = 'b' if gender == 'M' else 'r'
                     # line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
+
+                    c = 'n' if c == 'b' else c
 
                     if plot_type == 'line':
                         axs[c_i, 0].set_title(f"{c}_s1")
