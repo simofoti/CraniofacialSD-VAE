@@ -22,6 +22,10 @@ from sklearn.discriminant_analysis import \
     LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.metrics import confusion_matrix
 from sklearn.utils.multiclass import unique_labels
+from sklearn.exceptions import NotFittedError
+from scipy.stats import multivariate_normal
+from scipy.linalg import eigh
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 from utils import create_alpha_cmap, plot_confusion_matrix
@@ -42,6 +46,12 @@ class Tester:
         self._is_vae = self._manager.is_vae
         self._is_rae = self._manager.is_rae
         self.latent_stats = self.compute_latent_stats(train_load)
+        self._region_ldas = {key: LinearDiscriminantAnalysis(
+            n_components=2, store_covariance=True) for key in
+            self._manager.latent_regions.keys()}
+
+        self._dist_all_attrs_embedding_fig = None
+        self._dist_region_embeddings_fig = None
 
         self.coma_landmarks = [
             1337, 1344, 1163, 878, 3632, 2496, 2428, 2291, 2747,
@@ -752,6 +762,175 @@ class Tester:
         im = make_grid(renderings, padding=10, pad_value=1, nrow=len(features))
         save_image(im, os.path.join(self._out_dir, 'interpolate_all.png'))
 
+    def interpolate_syndrome_to_normal(self, patient_fname):
+        # Load and encode patient mesh
+        meshes_root = self._test_loader.dataset.root
+        mesh_path = os.path.join(meshes_root, patient_fname)
+        mesh = trimesh.load_mesh(mesh_path, 'obj', process=False)
+        mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
+                                  requires_grad=False, device='cpu')
+        v_p = (mesh_verts - self._norm_dict['mean']) / self._norm_dict['std']
+        z_p = self._manager.encode(v_p.unsqueeze(0).to(self._device))
+
+        # Find normal patients latent vectors
+        normal_p_index = self._manager.class2idx('n')
+        normal_p_mean = self._manager.qda.means_[normal_p_index]
+
+        # Move from mean of distribution to 1std in direction of z_p.
+        # Eigenvalues of covariance matrix are diagonal of covariance of aligned
+        # distribution -> use them to find pdf at 1 std
+
+        normal_p_covariance = self._manager.qda.covariance_[normal_p_index]
+        multi_normal_dist = multivariate_normal(mean=normal_p_mean,
+                                                cov=normal_p_covariance)
+        eigenval, eigenvec = eigh(normal_p_covariance)
+        reference_dist = multivariate_normal(mean=np.zeros_like(normal_p_mean),
+                                             cov=np.diag(eigenval))
+        reference_std_on_x1 = np.sqrt(reference_dist.cov[0, 0])
+        reference_std_vec_on_x1 = np.zeros_like(normal_p_mean)
+        reference_std_vec_on_x1[0] = reference_std_on_x1
+
+        reference_pdf_mean = -multi_normal_dist.logpdf(normal_p_mean)
+        reference_pdf_1std = -reference_dist.logpdf(reference_std_vec_on_x1)
+        reference_pdf_2std = -reference_dist.logpdf(2 * reference_std_vec_on_x1)
+        reference_pdf_3std = -reference_dist.logpdf(3 * reference_std_vec_on_x1)
+
+        # print(-multi_normal_dist.logpdf(z_p.detach().cpu().numpy()))
+        # print(reference_pdf_mean)
+        # print(reference_pdf_1std)  # close to mean
+        # print(reference_pdf_2std)
+        # print(reference_pdf_3std)  # far from mean
+
+        z_mean_target = torch.tensor(normal_p_mean).unsqueeze(0)
+        z_interp_full = self.vector_linspace(z_p, z_mean_target, 5000)
+
+        # find z vectors with correct pdf
+        pdf_intermediate = [-multi_normal_dist.logpdf(z.detach().cpu().numpy())
+                            for z in z_interp_full]
+        pdf_lt_3std = [p <= reference_pdf_3std for p in pdf_intermediate]
+        pdf_lt_2std = [p <= reference_pdf_2std for p in pdf_intermediate]
+        pdf_lt_1std = [p <= reference_pdf_1std for p in pdf_intermediate]
+
+        z_3std_target = z_interp_full[pdf_lt_3std.index(True), :].unsqueeze(0)
+        z_2std_target = z_interp_full[pdf_lt_2std.index(True), :].unsqueeze(0)
+        z_1std_target = z_interp_full[pdf_lt_1std.index(True), :].unsqueeze(0)
+
+        # Iterpolate all attributes ############################################
+        z_interp_pto3std = self.vector_linspace(z_p, z_3std_target, 8)
+        z_interp = torch.cat([z_interp_pto3std, z_2std_target,
+                              z_1std_target, z_mean_target], dim=0)
+        self._render_embed_save_z_interpolations(
+            z_interp, patient_fname[:-4] + '_all_attributes')
+
+        # Interpolate subsets of attributes ####################################
+        features = list(self._manager.template.feat_and_cont.keys())
+
+    def _render_embed_save_z_interpolations(self, z_interp, save_id):
+        out_interp_dir = os.path.join(self._out_dir, 'interpolations')
+        if not os.path.isdir(out_interp_dir):
+            os.mkdir(out_interp_dir)
+
+        fig_entire_z_name = os.path.join(self._out_dir,
+                                         'lda_emb_distributions.pkl')
+        fig_regions_z_name = os.path.join(self._out_dir,
+                                          'emb_all_train_dist.pkl')
+        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
+        try:
+            with open(fig_entire_z_name, 'rb') as f:
+                fig_entire_z = pickle.load(f)
+            with open(fig_regions_z_name, 'rb') as f:
+                fig_fgrid_regions_z = pickle.load(f)
+            with open(region_ldas_name, 'rb') as f:
+                self._region_ldas = pickle.load(f)
+        except FileNotFoundError:
+            self.plot_embeddings(embedding_mode='lda')
+            with open(fig_entire_z_name, 'rb') as f:
+                fig_entire_z = pickle.load(f)
+            with open(fig_regions_z_name, 'rb') as f:
+                fig_fgrid_regions_z = pickle.load(f)
+            with open(region_ldas_name, 'rb') as f:
+                self._region_ldas = pickle.load(f)
+
+        # project entire latents in 2D and save figure
+        z_interp_proj = self._manager.lda_project_latents_in_2d(
+            z_interp.detach().cpu().numpy())
+
+        ax = fig_entire_z.gca()
+        sns.scatterplot(x=z_interp_proj[:, 0], y=z_interp_proj[:, 1],
+                        ax=ax, c=['#e881a7'])
+        fig_entire_z.savefig(
+            os.path.join(out_interp_dir, save_id + '_emb_interpolate.svg'))
+
+        emb_images = []
+        for zproj in z_interp_proj:
+            with open(fig_entire_z_name, 'rb') as f:
+                fig_entire_z = pickle.load(f)
+            canvas = FigureCanvas(fig_entire_z)
+            ax = fig_entire_z.gca()
+            ax.scatter(x=zproj[0], y=zproj[1], c=['#e881a7'])
+            # rasterize plot
+            shape = list(canvas.get_width_height()[::-1]) + [3]
+            canvas.draw()
+            img = np.frombuffer(fig_entire_z.canvas.tostring_rgb(),
+                                dtype='uint8').reshape(shape)
+            emb_images.append(torch.tensor(np.array(img)))
+        write_video(
+            os.path.join(out_interp_dir, save_id + '_emb_interpolate.mp4'),
+            torch.stack(emb_images, dim=0), fps=4)
+
+        # project attribute latents in their 2D plots and save figure
+        # per_region_dfs_list = [fig_fgrid_regions_z.data]
+        z_interp_np = z_interp.detach().cpu().numpy()
+        r_proj = {}
+        for key, z_region in self._manager.latent_regions.items():
+            z_interp_region = z_interp_np[:, z_region[0]:z_region[1]]
+            z_r_embeddings = self._region_ldas[key].transform(z_interp_region)
+            r_proj[key] = z_r_embeddings
+            x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
+            fig_fgrid_regions_z.axes_dict[key].scatter(x1, x2,
+                                                       c=['#e881a7'], s=2)
+        fig_fgrid_regions_z.fig.savefig(
+            os.path.join(out_interp_dir, save_id + '_emb_r_interpolate.svg'))
+
+        emb_images = []
+        for point_idx in range(z_interp_np.shape[0]):
+            with open(fig_regions_z_name, 'rb') as f:
+                fig_fgrid_regions_z = pickle.load(f)
+            canvas = FigureCanvas(fig_fgrid_regions_z.fig)
+            shape = list(canvas.get_width_height()[::-1]) + [3]
+            for key, z_region in self._manager.latent_regions.items():
+                x1, x2 = r_proj[key][point_idx]
+                fig_fgrid_regions_z.axes_dict[key].scatter(x1, x2,
+                                                           c=['#e881a7'], s=2)
+            # rasterize plot
+            canvas.draw()
+            img = np.frombuffer(canvas.tostring_rgb(),
+                                dtype='uint8').reshape(shape)
+            emb_images.append(torch.tensor(np.array(img)))
+        video_frames = torch.stack(emb_images, dim=0)
+        pad_shape = [video_frames.shape[0], video_frames.shape[1], 1, 3]
+        video_frames = torch.cat([video_frames, torch.ones(pad_shape)], dim=2)
+        write_video(
+            os.path.join(out_interp_dir, save_id + '_emb_r_interpolate.mp4'),
+            video_frames, fps=4)
+
+        # render and save video + image of interpolation in mesh space
+        v_interp = self._manager.generate(z_interp.to(self._device))
+        v_interp = self._unnormalize_verts(v_interp) if self._normalized_data \
+            else v_interp
+
+        self.set_renderings_size(512)
+        self.set_rendering_background_color([1, 1, 1])
+        renderings = self._manager.render(v_interp).cpu()
+
+        im = make_grid(renderings, padding=10, pad_value=1,
+                       nrow=v_interp.shape[0])
+        write_video(
+            os.path.join(out_interp_dir, save_id + '_interpolate.mp4'),
+            renderings.permute(0, 2, 3, 1) * 255, fps=4)
+        save_image(im, os.path.join(out_interp_dir,
+                                    save_id + '_interpolate.png'))
+
     @staticmethod
     def vector_linspace(start, finish, steps):
         ls = []
@@ -832,6 +1011,7 @@ class Tester:
 
         # TRAIN REAL, trying to shade and blend distributions
         plt.clf()
+        fig_handle = plt.figure()
         cmaps = [create_alpha_cmap(c) for c in colours]
         handles = []
         for c, cmap, col in zip(hue_order, cmaps, colours):
@@ -847,8 +1027,15 @@ class Tester:
             )
             handles.append(mpatches.Patch(facecolor=col, label=c))
         plt.legend(handles=handles)
-        plt.savefig(os.path.join(self._out_dir,
-                                 embedding_mode + '_emb_distributions.svg'))
+
+        fig_name = os.path.join(self._out_dir,
+                                embedding_mode + '_emb_distributions')
+
+        # pickle figure to use it later in other plots
+        with open(fig_name + '.pkl', 'wb') as f:
+            pickle.dump(fig_handle, f)
+
+        plt.savefig(fig_name + '.svg')
 
         self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
 
@@ -858,9 +1045,14 @@ class Tester:
         for key, z_region in self._manager.latent_regions.items():
             if z_region[1] - z_region[0] > 2:
                 tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-                z_r_embeddings = LinearDiscriminantAnalysis(
-                    n_components=2, store_covariance=True).fit_transform(
-                    tr_z_np_region, tr_y)
+
+                try:
+                    z_r_embeddings = self._region_ldas[key].transform(
+                        tr_z_np_region)
+                except NotFittedError:
+                    z_r_embeddings = self._region_ldas[key].fit_transform(
+                        tr_z_np_region, tr_y)
+
                 x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
             else:
                 x1 = tr_z_np[:, z_region[0]]
@@ -889,10 +1081,18 @@ class Tester:
         g = sns.FacetGrid(df, col='region', hue='class', palette=colours,
                           hue_order=hue_order, col_wrap=5, height=2)
         g.map(sns.kdeplot, 'x1', 'x2', fill=False, levels=1, alpha=0.8,
-              thresh=0.5)
+              thresh=0.68)
         g.set_titles(col_template="{col_name}")
         g.add_legend()
-        plt.savefig(os.path.join(self._out_dir, 'emb_all_train_dist.svg'))
+
+        fig_name = os.path.join(self._out_dir, 'emb_all_train_dist')
+        with open(fig_name + '.pkl', 'wb') as f:
+            pickle.dump(g, f)
+        plt.savefig(fig_name + '.svg')
+
+        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
+        with open(region_ldas_name, 'wb') as f:
+            pickle.dump(self._region_ldas, f)
 
     def test_classifiers(self):
         plt.clf()
@@ -954,9 +1154,14 @@ class Tester:
         confusion_matrices_lda = {}
         for key, z_region in self._manager.latent_regions.items():
             tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-            r_lda = LinearDiscriminantAnalysis(
-                n_components=2, store_covariance=True).fit(tr_z_np_region, tr_y)
-            pred_r_lda = r_lda.predict(ts_z_np[:, z_region[0]:z_region[1]])
+            try:
+                pred_r_lda = self._region_ldas[key].predict(
+                    ts_z_np[:, z_region[0]:z_region[1]])
+            except NotFittedError:
+                self._region_ldas[key].fit(tr_z_np_region, tr_y)
+                pred_r_lda = self._region_ldas[key].predict(
+                    ts_z_np[:, z_region[0]:z_region[1]])
+
             confmat_r_lda = confusion_matrix(
                 ts_ly, self._manager.idx2class(pred_r_lda), normalize='true')
             confusion_matrices_lda[key] = confmat_r_lda
@@ -1033,8 +1238,9 @@ if __name__ == '__main__':
                     output_directory, configurations)
 
     # tester()
-    tester.test_classifiers()
     # tester.plot_embeddings(embedding_mode='lda')
+    # tester.test_classifiers()
+    tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
