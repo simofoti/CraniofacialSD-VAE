@@ -20,6 +20,45 @@ from matplotlib.colors import Normalize, ListedColormap, to_rgba_array
 from matplotlib.patches import Ellipse
 
 
+procedures2attributes_dict = {
+    'foar': ['[238 206  74 255]', '[116 192 194 255]'],
+    'genoplasty': ['[194 109  97 255]'],
+    'le_front_I': ['[232 129 166 255]', '[ 89  51 139 255]'],
+    'le_front_II': ['[232 129 166 255]', '[133 169 172 255]',
+                    '[237 109  93 255]'],
+    'le_front_III': ['[232 129 166 255]', '[133 169 172 255]',
+                     '[237 109  93 255]', '[ 89  51 139 255]',
+                     '[245 158  40 255]'],
+    'mandibular_ost': ['[194 109  97 255]', '[164  78 123 255]'],
+    'monobloc': ['[232 129 166 255]', '[133 169 172 255]',
+                 '[237 109  93 255]', '[ 89  51 139 255]',
+                 '[245 158  40 255]', '[ 26  81  82 255]',
+                 '[238 206  74 255]', '[116 192 194 255]'],
+    'orbital_ost': ['[133 169 172 255]', '[245 158  40 255]',
+                    '[ 26  81  82 255]', '[238 206  74 255]'],
+    'rhinoplasty': ['[237 109  93 255]'],
+    'zygomatic_ost': ['[ 89  51 139 255]', '[245 158  40 255]']
+}
+
+colour2attribute_dict = {
+    '[232 129 166 255]': 'upper lip',
+    '[194 109  97 255]': 'chin',
+    '[133 169 172 255]': 'nasolabial',
+    '[237 109  93 255]': 'nose',
+    '[ 89  51 139 255]': 'cheeks',
+    '[245 158  40 255]': 'zygomatic',
+    '[ 26  81  82 255]': 'eyes',
+    '[164  78 123 255]': 'jaw',
+    '[238 206  74 255]': 'supraorbital',
+    '[ 18  78 129 255]': 'neck',
+    '[245 160 106 255]': 'ears',
+    '[116 192 194 255]': 'frontal',
+    '[ 90  97 115 255]': 'occipital',
+    '[164 184 207 255]': 'temporal',
+    '[219 203 190 255]': 'parietal'
+}
+
+
 def get_config(config):
     with open(config, 'r') as stream:
         return yaml.safe_load(stream)

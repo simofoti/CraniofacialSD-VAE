@@ -28,7 +28,8 @@ from scipy.linalg import eigh
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
-from utils import create_alpha_cmap, plot_confusion_matrix
+from utils import create_alpha_cmap, plot_confusion_matrix, \
+    procedures2attributes_dict, colour2attribute_dict
 
 
 class Tester:
@@ -815,18 +816,52 @@ class Tester:
         z_2std_target = z_interp_full[pdf_lt_2std.index(True), :].unsqueeze(0)
         z_1std_target = z_interp_full[pdf_lt_1std.index(True), :].unsqueeze(0)
 
+        n_p_to_3std = 8
         # Iterpolate all attributes ############################################
-        z_interp_pto3std = self.vector_linspace(z_p, z_3std_target, 8)
+        z_interp_pto3std = self.vector_linspace(z_p, z_3std_target, n_p_to_3std)
         z_interp = torch.cat([z_interp_pto3std, z_2std_target,
                               z_1std_target, z_mean_target], dim=0)
         self._render_embed_save_z_interpolations(
             z_interp, patient_fname[:-4] + '_all_attributes')
 
         # Interpolate subsets of attributes ####################################
-        features = list(self._manager.template.feat_and_cont.keys())
+        proc_z_distances = pd.DataFrame(
+            columns=['procedure', 'd3', 'd2', 'd1', 'dm'])
+        for key, attributes in procedures2attributes_dict.items():
+            z_interp = z_p.repeat(n_p_to_3std + 3, 1)
+            for attr in attributes:
+                zf_idxs = self._manager.latent_regions[attr]
+                z_pf = z_p[:, zf_idxs[0]:zf_idxs[1]].to(self._device)
+                z_3f = z_3std_target[:, zf_idxs[0]:zf_idxs[1]].to(self._device)
+                z_interp[:n_p_to_3std, zf_idxs[0]:zf_idxs[1]] = \
+                    self.vector_linspace(z_pf, z_3f, n_p_to_3std)
+                z_2f = z_2std_target[:, zf_idxs[0]:zf_idxs[1]].to(self._device)
+                z_1f = z_1std_target[:, zf_idxs[0]:zf_idxs[1]].to(self._device)
+                z_mf = z_mean_target[:, zf_idxs[0]:zf_idxs[1]].to(self._device)
+                z_interp[n_p_to_3std, zf_idxs[0]:zf_idxs[1]] = z_2f
+                z_interp[n_p_to_3std + 1, zf_idxs[0]:zf_idxs[1]] = z_1f
+                z_interp[n_p_to_3std + 2, zf_idxs[0]:zf_idxs[1]] = z_mf
+
+            z_mean_target_dist = z_mean_target.squeeze().to(self._device)
+            d3 = self._manager.compute_mse_loss(z_interp[n_p_to_3std - 1, :],
+                                                z_mean_target_dist)
+            d2 = self._manager.compute_mse_loss(z_interp[n_p_to_3std, :],
+                                                z_mean_target_dist)
+            d1 = self._manager.compute_mse_loss(z_interp[n_p_to_3std + 1, :],
+                                                z_mean_target_dist)
+            dm = self._manager.compute_mse_loss(z_interp[n_p_to_3std + 2, :],
+                                                z_mean_target_dist)
+            proc_z_distances = proc_z_distances.append(
+                {'procedure': key, 'd3': d3.item(), 'd2': d2.item(),
+                 'd1': d1.item(), 'dm': dm.item()}, ignore_index=True)
+            self._render_embed_save_z_interpolations(
+                z_interp, patient_fname[:-4] + '_' + key)
+        proc_z_distances.to_csv(os.path.join(
+            self._out_dir, 'interpolations',
+            patient_fname[:-4] + '_procedure_distances.csv'))
 
     def _render_embed_save_z_interpolations(self, z_interp, save_id):
-        out_interp_dir = os.path.join(self._out_dir, 'interpolations')
+        out_interp_dir = os.path.join(self._out_dir, 'interpolations', save_id)
         if not os.path.isdir(out_interp_dir):
             os.mkdir(out_interp_dir)
 
@@ -887,8 +922,8 @@ class Tester:
             z_r_embeddings = self._region_ldas[key].transform(z_interp_region)
             r_proj[key] = z_r_embeddings
             x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
-            fig_fgrid_regions_z.axes_dict[key].scatter(x1, x2,
-                                                       c=['#e881a7'], s=2)
+            fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]].scatter(
+                x1, x2, c=['#e881a7'], s=2)
         fig_fgrid_regions_z.fig.savefig(
             os.path.join(out_interp_dir, save_id + '_emb_r_interpolate.svg'))
 
@@ -900,8 +935,9 @@ class Tester:
             shape = list(canvas.get_width_height()[::-1]) + [3]
             for key, z_region in self._manager.latent_regions.items():
                 x1, x2 = r_proj[key][point_idx]
-                fig_fgrid_regions_z.axes_dict[key].scatter(x1, x2,
-                                                           c=['#e881a7'], s=2)
+                keyname = colour2attribute_dict[key]
+                fig_fgrid_regions_z.axes_dict[keyname].scatter(
+                    x1, x2, c=['#e881a7'], s=2)
             # rasterize plot
             canvas.draw()
             img = np.frombuffer(canvas.tostring_rgb(),
@@ -1062,7 +1098,7 @@ class Tester:
                 'x1': x1, 'x2': x2,
                 'class': self._manager.idx2class(tr_y),
                 'aug': np.concatenate(tr_l['augmented']),
-                'region': np.array([key] * tr_y.shape[0])
+                'region': np.array([colour2attribute_dict[key]] * tr_y.shape[0])
             }))
         df = pd.concat(per_region_dfs_list)
         df.drop(df[df['aug']].index, inplace=True)
@@ -1189,7 +1225,7 @@ class Tester:
                 ax = plt.subplot(n_rows, n_cols, n + 1)
                 g = sns.heatmap(cf, annot=True, cmap="YlGnBu", ax=ax,
                                 vmin=0., vmax=1.)
-                g.set_title(region)
+                g.set_title(colour2attribute_dict[region])
                 g.set_xticklabels(labels)
                 g.set_yticklabels(labels)
                 g.set(ylabel="True Label", xlabel="Predicted Label")
@@ -1240,7 +1276,8 @@ if __name__ == '__main__':
     # tester()
     # tester.plot_embeddings(embedding_mode='lda')
     # tester.test_classifiers()
-    tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
+    # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
+    tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
