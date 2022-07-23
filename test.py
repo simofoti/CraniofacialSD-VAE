@@ -26,6 +26,8 @@ from sklearn.exceptions import NotFittedError
 from scipy.stats import multivariate_normal
 from scipy.linalg import eigh
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.colors import Normalize
+from matplotlib.cm import get_cmap
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 from utils import create_alpha_cmap, plot_confusion_matrix, \
@@ -284,11 +286,16 @@ class Tester:
 
         self.save_batch(gen_verts, out_mesh_dir)
 
-    def save_batch(self, batch_verts, out_mesh_dir):
+    def save_batch(self, batch_verts, out_mesh_dir, v_colours=None):
         for i in range(batch_verts.shape[0]):
+            vc = None
+            if v_colours is not None:
+                vc = v_colours[i, ::].cpu().detach().numpy()
+
             mesh = trimesh.Trimesh(
                 batch_verts[i, ::].cpu().detach().numpy(),
-                self._manager.template.face.t().cpu().numpy())
+                self._manager.template.face.t().cpu().numpy(),
+                vertex_colors=vc)
             mesh.export(os.path.join(out_mesh_dir, str(i) + '.ply'))
 
     def reconstruction_errors(self, data_loader):
@@ -964,6 +971,14 @@ class Tester:
         source_dist = self._manager.compute_vertex_errors(
             v_interp, v_interp[0, ::].expand(v_interp.shape[0], -1, -1))
 
+        out_mesh_dir = os.path.join(out_interp_dir, 'meshes_colormap')
+        if not os.path.isdir(out_mesh_dir):
+            os.mkdir(out_mesh_dir)
+        source_colours = utils.errors_to_colors(
+                source_dist, min_value=0,
+                max_value=10, cmap='plasma') / 255
+        self.save_batch(v_interp, out_mesh_dir, v_colours=source_colours)
+
         self.set_renderings_size(512)
         self.set_rendering_background_color([1, 1, 1])
         renderings = self._manager.render(v_interp).cpu()
@@ -1016,7 +1031,11 @@ class Tester:
             'class': self._manager.idx2class(np.concatenate([tr_y, ts_y])),
             'type': ['train'] * tr_y.shape[0] + ['test'] * ts_y.shape[0],
             'aug': np.concatenate([np.concatenate(tr_l['augmented']),
-                                  np.concatenate(ts_l['augmented'])])
+                                  np.concatenate(ts_l['augmented'])]),
+            'gender': np.concatenate([np.concatenate(tr_l['gender']),
+                                      np.concatenate(ts_l['gender'])]),
+            'age': np.concatenate([np.concatenate(tr_l['age']),
+                                   np.concatenate(ts_l['age'])]),
         })
 
         colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81']
@@ -1085,6 +1104,19 @@ class Tester:
             pickle.dump(fig_handle, f)
 
         plt.savefig(fig_name + '.svg')
+
+        normalize_color = Normalize(vmin=-60.0, vmax=240.0)
+        ax = fig_handle.gca()
+        ax.scatter(df.loc[df['gender'] == 'M']['x1'],
+                   df.loc[df['gender'] == 'M']['x2'],
+                   c=df.loc[df['gender'] == 'M']['age'], s=4,
+                   cmap=get_cmap('Blues'), norm=normalize_color)
+        ax.scatter(df.loc[df['gender'] == 'F']['x1'],
+                   df.loc[df['gender'] == 'F']['x2'],
+                   c=df.loc[df['gender'] == 'F']['age'], s=4,
+                   cmap=get_cmap('Reds'), norm=normalize_color)
+        plt.savefig(os.path.join(self._out_dir,
+                                 embedding_mode + '_emb_distributions_a_g.svg'))
 
         self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
 
@@ -1309,7 +1341,7 @@ if __name__ == '__main__':
     # tester.test_classifiers()
     tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
-    tester.interpolate_syndrome_to_normal(patient_fname='c_112.obj')  # special
+    # tester.interpolate_syndrome_to_normal(patient_fname='c_112.obj')  # special
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
