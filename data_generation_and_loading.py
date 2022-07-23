@@ -458,13 +458,14 @@ class MeshInMemoryDataset(InMemoryDataset):
         s, u = compute_laplacian_eigendecomposition(self._template, k=k)
         spectral_proj_template = u.T @ self._template.pos.detach().cpu().numpy()
         data_classes = set([name[0] for name in filenames])
+        data_classes = [c for c in data_classes if c != 'b']
 
         sns.set_theme(style="ticks")
         fig, axs = plt.subplots(len(data_classes), 3, figsize=(10, 10))
 
         for c_i, c in enumerate(data_classes):
             for name in filenames:
-                if name[0] == c:
+                if name[0] == c or (name[0] == 'b' and c == 'n'):
                     path = os.path.join(self._root, name)
                     age, gender = get_age_and_gender_from_summary(
                         self._dataset_summary, name[:-4])
@@ -483,8 +484,6 @@ class MeshInMemoryDataset(InMemoryDataset):
                     # line_colour = 'b' if gender == 'M' else 'r'
                     # line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
 
-                    c = 'n' if c == 'b' else c
-
                     if plot_type == 'line':
                         axs[c_i, 0].set_title(f"{c}_s1")
                         axs[c_i, 0].plot(x, spectral_proj[:, 0],
@@ -497,13 +496,13 @@ class MeshInMemoryDataset(InMemoryDataset):
                                          color=line_colour, linewidth=0.5)
                     else:
                         axs[c_i, 0].set_title(f"{c}_s1")
-                        axs[c_i, 0].scatter(x, spectral_proj[:, 0], s=5,
+                        axs[c_i, 0].scatter(x, spectral_proj[:, 0], s=1,
                                             color=line_colour, linewidth=0.5)
                         axs[c_i, 1].set_title(f"{c}_s2")
-                        axs[c_i, 1].scatter(x, spectral_proj[:, 1], s=5,
+                        axs[c_i, 1].scatter(x, spectral_proj[:, 1], s=1,
                                             color=line_colour, linewidth=0.5)
                         axs[c_i, 2].set_title(f"{c}_s3")
-                        axs[c_i, 2].scatter(x, spectral_proj[:, 2], s=5,
+                        axs[c_i, 2].scatter(x, spectral_proj[:, 2], s=1,
                                             color=line_colour, linewidth=0.5)
 
         for ax in axs.flat:
