@@ -1,25 +1,25 @@
 data:
-  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
+  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template_sym2_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
   dataset_summary_path: /media/simo/DATASHURPRO/for_simone/full_dataset_summary.xlsx
   precomputed_path: precomputed_craniofacial
   data_type: heads                                                              # {heads, faces}
   stratified_split: True
   dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes
   augmentation_mode: spectral_interp                                            # {interpolate, spectral_interp, spectral_comb}
-  augmentation_factor: 10
+  augmentation_factor: 5
   augmentation_balanced: True                                                   # if True, total meshes are the same across classes. If False, meshes of each class are augmented by augmentation_factor
   normalize_data: True
-  to_mm_constant: 156.28255886643                                               # if already in mm set to 1, otherwise set proper multiplicative constant
+  to_mm_constant: 89.11                                                         # if already in mm set to 1, otherwise set proper multiplicative constant
   number_of_workers: 8
   swap_features: True                                                           # if True, the resulting batch size will be batch_size^2
 
 optimization:
-  epochs: 40
+  epochs: 600
   batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
   lr: 1e-4
   weight_decay: 0
 
-  laplacian_weight: 1
+  laplacian_weight: 0.1
   kl_weight: 1e-4                                                               # if 0, AE or RAE architecture is used
 
   latent_consistency_weight: 0.5                                                # if 0, no latent consistency loss is used
@@ -49,7 +49,7 @@ model:
     dilation: [1, 1, 1, 1]                                                      # spiral dilation for each convolution. Delete precomputed file if changed.
   in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
   out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
-  latent_size: 76                                                               # size of the latent vector
+  latent_size: 75                                                               # size of the latent vector
   pre_z_sigmoid: False
 
 classifier:
@@ -58,8 +58,8 @@ classifier:
   mlp_hidden_features: [512, 128, 64]
   mlp_lr: 1e-4
   mlp_loss_weight: 1                                                            # only if training_type is end2end
-  mlp_epochs: 100                                                               # only if training_type is after
+  mlp_epochs: 50                                                                # only if training_type is after
 
 logging_frequency:
-  tb_renderings: 5
-  save_weights: 20
+  tb_renderings: 50
+  save_weights: 100

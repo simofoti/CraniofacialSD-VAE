@@ -20,7 +20,7 @@ from pytorch3d.ops.knn import knn_points
 from sklearn.manifold import TSNE
 from sklearn.discriminant_analysis import \
     LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.utils.multiclass import unique_labels
 from sklearn.exceptions import NotFittedError
 from scipy.stats import multivariate_normal
@@ -311,7 +311,8 @@ class Tester:
         data_errors = torch.cat(data_errors, dim=0)
         return {'mean': torch.mean(data_errors).item(),
                 'median': torch.median(data_errors).item(),
-                'max': torch.max(data_errors).item()}
+                'max': torch.max(data_errors).item(),
+                'std': torch.std(data_errors).item()}
 
     def compute_diversity_train_set(self):
         print('Computing train set diversity')
@@ -955,15 +956,27 @@ class Tester:
         v_interp = self._unnormalize_verts(v_interp) if self._normalized_data \
             else v_interp
 
+        out_mesh_dir = os.path.join(out_interp_dir, 'meshes')
+        if not os.path.isdir(out_mesh_dir):
+            os.mkdir(out_mesh_dir)
+        self.save_batch(v_interp, out_mesh_dir)
+
+        source_dist = self._manager.compute_vertex_errors(
+            v_interp, v_interp[0, ::].expand(v_interp.shape[0], -1, -1))
+
         self.set_renderings_size(512)
         self.set_rendering_background_color([1, 1, 1])
         renderings = self._manager.render(v_interp).cpu()
+        renderings_dist = self._manager.render(v_interp, source_dist,
+                                               error_max_scale=10).cpu()
 
-        im = make_grid(renderings, padding=10, pad_value=1,
-                       nrow=v_interp.shape[0])
+        im = make_grid(torch.cat([renderings, renderings_dist], dim=-2),
+                       padding=10, pad_value=1, nrow=v_interp.shape[0])
+
+        rend_comb = torch.cat([renderings, renderings_dist], dim=-1)
         write_video(
             os.path.join(out_interp_dir, save_id + '_interpolate.mp4'),
-            renderings.permute(0, 2, 3, 1) * 255, fps=4)
+            rend_comb.permute(0, 2, 3, 1) * 255, fps=4)
         save_image(im, os.path.join(out_interp_dir,
                                     save_id + '_interpolate.png'))
 
@@ -1159,6 +1172,24 @@ class Tester:
         pred_lda = self._manager.lda.predict(ts_z_np)
         pred_qda = self._manager.qda.predict(ts_z_np)
 
+        report_mlp = classification_report(ts_ly,
+                                           self._manager.idx2class(pred_mlp),
+                                           output_dict=True)
+        report_svm = classification_report(ts_ly,
+                                           self._manager.idx2class(pred_svm),
+                                           output_dict=True)
+        report_lda = classification_report(ts_ly,
+                                           self._manager.idx2class(pred_lda),
+                                           output_dict=True)
+        report_qda = classification_report(ts_ly,
+                                           self._manager.idx2class(pred_qda),
+                                           output_dict=True)
+        reports = {'mlp': report_mlp, 'svm': report_svm,
+                   'lda': report_lda, 'qda': report_qda}
+        outfile_path = os.path.join(self._out_dir, 'classification_report.json')
+        with open(outfile_path, 'w') as outfile:
+            json.dump(reports, outfile)
+
         confmat_mlp = confusion_matrix(ts_ly, self._manager.idx2class(pred_mlp),
                                        normalize='true')
         confmat_svm = confusion_matrix(ts_ly, self._manager.idx2class(pred_svm),
@@ -1224,10 +1255,10 @@ class Tester:
             for n, (region, cf) in enumerate(confusion_matrices.items()):
                 ax = plt.subplot(n_rows, n_cols, n + 1)
                 g = sns.heatmap(cf, annot=True, cmap="YlGnBu", ax=ax,
-                                vmin=0., vmax=1.)
-                g.set_title(colour2attribute_dict[region])
-                g.set_xticklabels(labels)
-                g.set_yticklabels(labels)
+                                vmin=0., vmax=1., annot_kws={"fontsize": 26})
+                g.set_title(colour2attribute_dict[region], fontsize=18)
+                g.set_xticklabels(labels, fontsize=18)
+                g.set_yticklabels(labels, fontsize=18)
                 g.set(ylabel="True Label", xlabel="Predicted Label")
             plt.tight_layout()
             plt.savefig(os.path.join(self._out_dir, f"region_confmats_{m}.svg"),
@@ -1276,8 +1307,9 @@ if __name__ == '__main__':
     # tester()
     # tester.plot_embeddings(embedding_mode='lda')
     # tester.test_classifiers()
-    # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
+    tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
+    tester.interpolate_syndrome_to_normal(patient_fname='c_112.obj')  # special
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
