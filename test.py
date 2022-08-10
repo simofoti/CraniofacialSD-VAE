@@ -771,8 +771,7 @@ class Tester:
         im = make_grid(renderings, padding=10, pad_value=1, nrow=len(features))
         save_image(im, os.path.join(self._out_dir, 'interpolate_all.png'))
 
-    def interpolate_syndrome_to_normal(self, patient_fname):
-        # Load and encode patient mesh
+    def _load_and_encode(self, patient_fname):
         meshes_root = self._test_loader.dataset.root
         mesh_path = os.path.join(meshes_root, patient_fname)
         mesh = trimesh.load_mesh(mesh_path, 'obj', process=False)
@@ -780,6 +779,10 @@ class Tester:
                                   requires_grad=False, device='cpu')
         v_p = (mesh_verts - self._norm_dict['mean']) / self._norm_dict['std']
         z_p = self._manager.encode(v_p.unsqueeze(0).to(self._device))
+        return z_p
+
+    def interpolate_syndrome_to_normal(self, patient_fname):
+        z_p = self._load_and_encode(patient_fname)
 
         # Find normal patients latent vectors
         normal_p_index = self._manager.class2idx('n')
@@ -994,6 +997,43 @@ class Tester:
             rend_comb.permute(0, 2, 3, 1) * 255, fps=4)
         save_image(im, os.path.join(out_interp_dir,
                                     save_id + '_interpolate.png'))
+
+    def classify_and_project(self, patient_fname):
+        z_p = self._load_and_encode(patient_fname)
+        print(self._manager.classify_latent(z_p, 'qda'))
+
+        fig_entire_z_name = os.path.join(self._out_dir,
+                                         'lda_emb_distributions.pkl')
+        with open(fig_entire_z_name, 'rb') as f:
+            fig_entire_z = pickle.load(f)
+
+        z_proj = self._manager.lda_project_latents_in_2d(
+            z_p.detach().cpu().numpy())
+
+        ax = fig_entire_z.gca()
+        sns.scatterplot(x=z_proj[:, 0], y=z_proj[:, 1], ax=ax, c=['#e881a7'])
+        out_interp_dir = os.path.join(self._out_dir, 'interpolations')
+        fig_entire_z.savefig(
+            os.path.join(out_interp_dir, patient_fname[:-4] + '_emb.svg'))
+
+        fig_regions_z_name = os.path.join(self._out_dir,
+                                          'emb_all_train_dist.pkl')
+        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
+        with open(fig_regions_z_name, 'rb') as f:
+            fig_fgrid_regions_z = pickle.load(f)
+        with open(region_ldas_name, 'rb') as f:
+            self._region_ldas = pickle.load(f)
+        z_p_np = z_p.detach().cpu().numpy()
+        r_proj = {}
+        for key, z_region in self._manager.latent_regions.items():
+            z_p_region = z_p_np[:, z_region[0]:z_region[1]]
+            z_r_embeddings = self._region_ldas[key].transform(z_p_region)
+            r_proj[key] = z_r_embeddings
+            x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
+            fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]].scatter(
+                x1, x2, c=['#e881a7'], s=2)
+        fig_fgrid_regions_z.fig.savefig(
+            os.path.join(out_interp_dir, patient_fname[:-4] + '_emb_r.svg'))
 
     @staticmethod
     def vector_linspace(start, finish, steps):
@@ -1339,9 +1379,11 @@ if __name__ == '__main__':
     # tester()
     # tester.plot_embeddings(embedding_mode='lda')
     # tester.test_classifiers()
-    tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
-    tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
-    # tester.interpolate_syndrome_to_normal(patient_fname='c_112.obj')  # special
+    # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
+    # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
+    # tester.interpolate_syndrome_to_normal(
+    #     patient_fname='c_atypical_head_face.obj')
+    tester.classify_and_project(patient_fname='c_atypical_head_face.obj')
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)

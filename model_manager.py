@@ -694,11 +694,11 @@ class ModelManager(torch.nn.Module):
         if model == 'mlp':
             y_pred = self.classifier_mlp(z.to(self.device)).detach().numpy()
         elif model == 'svm':
-            y_pred = self.classifier_svm.predict(z.detach().numpy())
+            y_pred = self.classifier_svm.predict(z.detach().cpu().numpy())
         elif model == 'lda':
-            y_pred = self.lda.predict(z.detach().numpy())
+            y_pred = self.lda.predict(z.detach().cpu().numpy())
         elif model == 'qda':
-            y_pred = self.qda.predict(z.detach().numpy())
+            y_pred = self.qda.predict(z.detach().cpu().numpy())
         else:
             raise NotImplementedError
         return self.idx2class(y_pred)
