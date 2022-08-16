@@ -459,6 +459,7 @@ class MeshInMemoryDataset(InMemoryDataset):
         spectral_proj_template = u.T @ self._template.pos.detach().cpu().numpy()
         data_classes = set([name[0] for name in filenames])
         data_classes = [c for c in data_classes if c != 'b']
+        # data_classes = ['n', 'a', 'c', 'm']  # for consistent order in plots
 
         sns.set_theme(style="ticks")
         fig, axs = plt.subplots(len(data_classes), 3, figsize=(10, 10))
@@ -482,26 +483,27 @@ class MeshInMemoryDataset(InMemoryDataset):
                     line_colour[-1] = 0.7
 
                     # line_colour = 'b' if gender == 'M' else 'r'
-                    # line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
+                    line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
 
+                    n = 'H' if c == 'n' else c.upper()
                     if plot_type == 'line':
-                        axs[c_i, 0].set_title(f"{c}_s1")
+                        axs[c_i, 0].set_title(f"{n}x")
                         axs[c_i, 0].plot(x, spectral_proj[:, 0],
                                          color=line_colour, linewidth=0.5)
-                        axs[c_i, 1].set_title(f"{c}_s2")
+                        axs[c_i, 1].set_title(f"{n}y")
                         axs[c_i, 1].plot(x, spectral_proj[:, 1],
                                          color=line_colour, linewidth=0.5)
-                        axs[c_i, 2].set_title(f"{c}_s3")
+                        axs[c_i, 2].set_title(f"{n}z")
                         axs[c_i, 2].plot(x, spectral_proj[:, 2],
                                          color=line_colour, linewidth=0.5)
                     else:
-                        axs[c_i, 0].set_title(f"{c}_s1")
+                        axs[c_i, 0].set_title(f"{n}x")
                         axs[c_i, 0].scatter(x, spectral_proj[:, 0], s=1,
                                             color=line_colour, linewidth=0.5)
-                        axs[c_i, 1].set_title(f"{c}_s2")
+                        axs[c_i, 1].set_title(f"{n}y")
                         axs[c_i, 1].scatter(x, spectral_proj[:, 1], s=1,
                                             color=line_colour, linewidth=0.5)
-                        axs[c_i, 2].set_title(f"{c}_s3")
+                        axs[c_i, 2].set_title(f"{n}z")
                         axs[c_i, 2].scatter(x, spectral_proj[:, 2], s=1,
                                             color=line_colour, linewidth=0.5)
 
@@ -524,6 +526,9 @@ if __name__ == '__main__':
     opts = parser.parse_args()
     conf = utils.get_config(opts.config)
 
+    tpl = utils.load_template(conf['data']['template_path'])
     # BodyGenerator('/home/simo/Desktop').save_mean_mesh()
-    tr_loader, val_loader, te_loader, norm_dict = get_data_loaders(conf, None)
-    tr_loader.dataset.save_mean_mesh()
+    tr_loader, val_loader, te_loader, norm_d, _ = get_data_loaders(conf, tpl)
+    # tr_loader.dataset.save_mean_mesh()
+    # fnames = tr_loader.dataset.find_filenames(find_augmented=False)
+    # tr_loader.dataset._spectral_projections_analysis(fnames, k=30)
