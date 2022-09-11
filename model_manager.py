@@ -712,6 +712,9 @@ class ModelManager(torch.nn.Module):
         self._class_weights = torch.tensor(list_weights)
         self._class_weights /= self._class_weights.sum()
 
+    def set_class_conversions(self, class2idx_dict):
+        self._class2idx_dict = class2idx_dict
+
     def class2idx(self, data_class):
         if isinstance(data_class, list) or isinstance(data_class, np.ndarray):
             idxs = [self._class2idx_dict[d] for d in data_class]

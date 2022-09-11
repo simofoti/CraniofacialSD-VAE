@@ -53,7 +53,7 @@ model:
   pre_z_sigmoid: False
 
 classifier:
-  main_model_type: mlp                                                          # {mlp, svm, lda, qda, none}
+  main_model_type: qda                                                          # {mlp, svm, lda, qda, none}
   mlp_training_type: after                                                      # {end2end, after}
   mlp_hidden_features: [512, 128, 64]
   mlp_lr: 1e-4
