@@ -9,7 +9,8 @@ If you use this code, please cite also the aforementioned paper.
   
 ## System requirements
 
-This software was tested on Ubuntu 20.04 LTS, with Python 3.8, and CUDA 10.1.
+This software was implemented on Ubuntu 20.04 LTS, with Python 3.8, and CUDA 10.1.
+The software was also tested on Ubuntu 20.04 LTS, with Python 3.8, and CUDA 11.3.
 Different OSs can be used as long as they have a pytorch-compatible GPU and 
 python is available. Different versions of CUDA and Python can be used. 
 Follow the installation instructions to make sure that the correct libraries are
@@ -30,12 +31,22 @@ and run it with:
 ./install_env.sh
 ```
 This will create a virtual environment with all the necessary libraries. 
-The automatic installation should take approximately 7 minutes.
+The automatic installation should take approximately 7 minutes. Note that
+pytorch is very heavy and if a pre-existing version is not pre-cached, downloading 
+pytorch may take up to 1 hour. The download speed is just a rough estimates 
+because it is highly affected by the internet connection.
 
-Note that the code was tested with Python 3.8, CUDA 10.1, and Pytorch 1.7.1. The code 
-should work also with newer versions of  Python, CUDA, and Pytorch. If you wish 
-to try running the code with more recent versions of these libraries, change the 
-CUDA, TORCH, and PYTHON_V variables in `install_env.sh`
+Note that the code was developed with Python 3.8, CUDA 10.1, and Pytorch 1.7.1. 
+The code was also tested with Python 3.8, CUDA 11.3, and Pytorch 1.12.1. 
+We provide an automatic installation script for the latest set of libraries. 
+The code should work also with other versions of  Python, CUDA, and Pytorch. 
+If you wish to try running the code with more recent versions of these libraries, 
+change the CUDA, TORCH, TORCHVISION, and PYTHON_V variables in `install_env.sh`
+
+If you want to install CUDA 11.3 and you already have another CUDA version, 
+we recommend following the instruction provided at https://jin-zhe.github.io/guides/getting-cudnn/.
+Obviously, make sure that the commands you type in the terminal have the correct 
+CUDA version and not the one suggested in the tutorial.
 
 Then activate the virtual environment :
 ```shell script
