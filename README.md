@@ -46,7 +46,8 @@ change the CUDA, TORCH, TORCHVISION, and PYTHON_V variables in `install_env.sh`
 If you want to install CUDA 11.3 and you already have another CUDA version, 
 we recommend following the instruction provided at https://jin-zhe.github.io/guides/getting-cudnn/.
 Obviously, make sure that the commands you type in the terminal have the correct 
-CUDA version and not the one suggested in the tutorial.
+CUDA version and not the one suggested in the tutorial. Before installing a new 
+CUDA version, check the drivers compatibility at https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html.
 
 Then activate the virtual environment :
 ```shell script
