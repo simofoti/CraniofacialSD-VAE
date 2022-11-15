@@ -10,7 +10,7 @@ export TORCHVISION=0.13.1
 export TORCH_GEOM_VERSION=1.12.0
 
 pip install cmake
-pip install trimesh pyrender tqdm matplotlib==3.4.0 rtree openmesh tb-nightly av seaborn xlrd openpyxl
+pip install trimesh pyrender tqdm matplotlib rtree openmesh tb-nightly av seaborn xlrd openpyxl
 
 pip3 install torch==${TORCH} torchvision==${TORCHVISION} --default-timeout=1000 --extra-index-url https://download.pytorch.org/whl/${CUDA}
 
