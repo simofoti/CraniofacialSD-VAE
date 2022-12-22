@@ -4,6 +4,7 @@ import pickle
 import tqdm
 import trimesh
 import torch.nn
+import geomloss
 import pytorch3d.loss
 
 import numpy as np
@@ -57,7 +58,9 @@ class Tester:
         self._dist_region_embeddings_fig = None
 
         self.template_landmarks_idx = [14336, 14250, 13087, 13145, 4134,
-                                       871, 4166, 303, 15614, 7166, 3904]
+                                       871, 4166, 303, 15614, 7166,
+                                       3904, 16465, 9246, 4643, 10122,
+                                       4548, 2893, 2985, 830, 2004]
 
     def __call__(self):
         self.set_renderings_size(256)
@@ -503,10 +506,20 @@ class Tester:
         aligned_new_m_lnd = torch.tensor(aligned_new_m_lnd,
                                          device=self._device).unsqueeze(0)
 
-        z = self.latent_stats['means'].clone().detach().requires_grad_(True)
+        z_l = [torch.randn_like(self.latent_stats['means']) for _ in range(15)]
+        z_l.append(self.latent_stats['means'])
+        z = torch.stack(z_l, dim=0).clone().detach().requires_grad_(True)
+        # z = self.latent_stats['means'].clone().detach().requires_grad_(True)
+
+        # offset_verts = torch.full(self._norm_dict['mean'].shape, 0.0,
+        #                           device=self._device, requires_grad=True)
+        # optimizer = torch.optim.Adam([offset_verts], lr)
+
         optimizer = torch.optim.Adam([z], lr)
         gen_verts = None
-        ch_losses, lnd_losses = [], []
+        ch_losses, geom_losses, lnd_losses = [], [], []
+
+        gloss_func = geomloss.SamplesLoss("sinkhorn", p=2, blur=0.05, reach=0.3)
         for i in tqdm.tqdm(range(iterations)):
             optimizer.zero_grad()
             gen_verts = self._manager.generate_for_opt(z.to(self._device))
@@ -515,23 +528,78 @@ class Tester:
 
             lnd_loss = self._manager.compute_mse_loss(
                 gen_verts[:, self.template_landmarks_idx, :],
-                aligned_new_m_lnd)
-            ch_loss = pytorch3d.loss.chamfer_distance(gen_verts,
-                                                      aligned_new_m_verts)[0]
-            if i < 1:
-                total_loss = lnd_loss
-            else:
-                total_loss = ch_loss + lnd_loss
+                aligned_new_m_lnd.expand(16, -1, -1))
+            ch_loss = pytorch3d.loss.chamfer_distance(
+                gen_verts, aligned_new_m_verts.expand(16, -1, -1))[0]
+            # geom_loss = gloss_func(gen_verts, aligned_new_m_verts).squeeze(0)
+
+            # gen_verts = self._norm_dict['mean'].to(self._device) + offset_verts
+            # gen_verts = gen_verts.unsqueeze(0)
+            # lnd_loss = self._manager.compute_mse_loss(
+            #     gen_verts[:, self.template_landmarks_idx, :],
+            #     aligned_new_m_lnd)
+            # ch_loss = pytorch3d.loss.chamfer_distance(
+            #     gen_verts, aligned_new_m_verts)[0]
+            # lapl_loss = self._manager._compute_laplacian_regularizer(gen_verts)
+            #
+            # total_loss = lnd_loss + ch_loss + lapl_loss
+            total_loss = 10 * lnd_loss + ch_loss
+
             total_loss.backward()
             optimizer.step()
 
             ch_losses.append(ch_loss.item() * self._manager.to_mm_const)
+            # geom_losses.append(geom_loss.item() * self._manager.to_mm_const)
             lnd_losses.append(lnd_loss.item() * self._manager.to_mm_const)
 
-        # closest_p_errors = self._manager.to_mm_const * self._dist_closest_point(
-        #     gen_verts, aligned_new_m_verts.unsqueeze(0))
+        errors_shape = pytorch3d.loss.chamfer_distance(
+            gen_verts, aligned_new_m_verts.expand(16, -1, -1),
+            batch_reduction=None)[0]
+        errors_lnd = torch.mean(self._manager.compute_mse_loss(
+            gen_verts[:, self.template_landmarks_idx, :],
+            aligned_new_m_lnd.expand(16, -1, -1),
+            reduction='none').view(gen_verts.shape[0], -1), dim=1)
+
+        # errors_shape = pytorch3d.loss.chamfer_distance(
+        #     gen_verts, aligned_new_m_verts,
+        #     batch_reduction=None)[0]
+        # errors_lnd = torch.mean(self._manager.compute_mse_loss(
+        #     gen_verts[:, self.template_landmarks_idx, :],
+        #     aligned_new_m_lnd,
+        #     reduction='none').view(gen_verts.shape[0], -1), dim=1)
+        errors = 10 * errors_lnd + errors_lnd
+        min_error_idx = torch.argmin(errors)
+        # min_error_idx = 0
+
+        v_p = (gen_verts - self._norm_dict['mean'].to(self._device)) / \
+            self._norm_dict['std'].to(self._device)
+        z_p = self._manager.encode(v_p.to(self._device))
+        pred_class = self._manager.classify_latent(
+            z_p[min_error_idx, ::].unsqueeze(0), 'qda')
+        print(f"class_enc: {pred_class}")
+
+        # local QDAs:
+        tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
+        tr_z_np = torch.cat(tr_z, dim=0).numpy()
+        for key, z_region in self._manager.latent_regions.items():
+            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
+            tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
+            r_qda = QuadraticDiscriminantAnalysis(
+                store_covariance=True).fit(tr_z_np_region, tr_y)
+            z_loc = z[min_error_idx, z_region[0]:z_region[1]]
+            pred_r_qda = r_qda.predict(
+                z_loc.unsqueeze(0).cpu().detach().numpy())
+            print(f"{colour2attribute_dict[key]} -> "
+                  f"{self._manager.idx2class(pred_r_qda)}")
+
+        print(f"ch: {errors_shape[min_error_idx] * self._manager.to_mm_const}. "
+              f"lnd: {errors_lnd[min_error_idx] * self._manager.to_mm_const}")
+        pred_class = self._manager.classify_latent(
+            z[min_error_idx, ::].unsqueeze(0), 'qda')
+        print(f"class: {pred_class}")
 
         plt.plot(ch_losses)
+        # plt.plot(geom_losses)
         plt.plot(lnd_losses)
         plt.show()
 
@@ -540,17 +608,50 @@ class Tester:
         new_m_mesh.vertices = aligned_new_m_verts.squeeze(0).cpu().numpy()
         new_m_mesh.export(new_m_path[:-4] + "_aligned.obj")
 
-        gen_m = trimesh.Trimesh(gen_verts.squeeze(0).detach().cpu().numpy(),
-                                self._manager.template.face.t().cpu().numpy())
+        out_verts = gen_verts[min_error_idx, ::].detach().cpu().numpy()
+        gen_m = trimesh.Trimesh(
+            out_verts, self._manager.template.face.t().cpu().numpy())
         gen_m.export(new_m_path[:-4] + "_fit.obj")
         gen_landmarks = trimesh.PointCloud(
-            gen_verts[:, self.template_landmarks_idx, :].squeeze(0).cpu().detach().numpy())
+            out_verts[self.template_landmarks_idx, :])
 
         scene.add_geometry(gen_m)
         # scene.add_geometry(new_m_mesh)
         scene.add_geometry(gen_landmarks)
         scene.show()
-        return gen_verts.squeeze(), z.detach()
+
+        # delete from here
+        fig_entire_z_name = os.path.join(self._out_dir,
+                                         'lda_emb_distributions.pkl')
+        with open(fig_entire_z_name, 'rb') as f:
+            fig_entire_z = pickle.load(f)
+
+        z_proj = self._manager.lda_project_latents_in_2d(
+            z[min_error_idx, ::].unsqueeze(0).detach().cpu().numpy())
+
+        ax = fig_entire_z.gca()
+        sns.scatterplot(x=z_proj[:, 0], y=z_proj[:, 1], ax=ax, c=['#e881a7'])
+        plt.show()
+
+        fig_regions_z_name = os.path.join(self._out_dir,
+                                          'emb_all_train_dist.pkl')
+        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
+        with open(fig_regions_z_name, 'rb') as f:
+            fig_fgrid_regions_z = pickle.load(f)
+        with open(region_ldas_name, 'rb') as f:
+            self._region_ldas = pickle.load(f)
+        z_p_np = z[min_error_idx, ::].unsqueeze(0).detach().cpu().numpy()
+        r_proj = {}
+        for key, z_region in self._manager.latent_regions.items():
+            z_p_region = z_p_np[:, z_region[0]:z_region[1]]
+            z_r_embeddings = self._region_ldas[key].transform(z_p_region)
+            r_proj[key] = z_r_embeddings
+            x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
+            fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]].scatter(
+                x1, x2, c=['#e881a7'], s=2)
+        plt.show()
+
+        return out_verts, z[min_error_idx, ::].detach()
 
     @staticmethod
     def _point_mesh_distance(points, verts, faces):
@@ -1338,13 +1439,21 @@ if __name__ == '__main__':
                     output_directory, configurations)
 
     # tester()
+    # tester.fit_mesh(
+    #     new_m_path="/media/simo/DATASHURPRO/for_simone/atypical_cruzon/atypical_head_face.obj",
+    #     new_m_landmarks_path="/media/simo/DATASHURPRO/for_simone/atypical_cruzon/atypical_head_face_lnd.txt",
+    #     lr=0.01, iterations=200)
+    # tester.fit_mesh(
+    #     new_m_path="/home/simo/Desktop/NEW_MODELS/Crouzon/3043070/c_3043070_18-12-2019_dummy_cleaned.obj",
+    #     new_m_landmarks_path="/home/simo/Desktop/NEW_MODELS/Crouzon/3043070/c_3043070_18-12-2019_dummy_20_lnd.txt",
+    #     lr=0.01, iterations=200)
     # tester.plot_embeddings(embedding_mode='lda')
-    # tester.test_classifiers()
+    tester.test_classifiers()
     # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.interpolate_syndrome_to_normal(
     #     patient_fname='c_atypical_head_face.obj')
-    tester.classify_and_project(patient_fname='c_atypical_head_face.obj')
+    # tester.classify_and_project(patient_fname='c_atypical_head_face.obj')
     # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
