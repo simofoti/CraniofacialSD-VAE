@@ -112,6 +112,8 @@ def get_data_loaders(config, template=None):
 
     swapper = SwapFeatures(template) if data_config['swap_features'] else None
 
+    # validation_set = torch.utils.data.ConcatDataset([validation_set, test_set])
+
     train_loader = MeshLoader(train_set, batch_size, shuffle=True,
                               drop_last=True, feature_swapper=swapper,
                               num_workers=data_config['number_of_workers'])
@@ -162,6 +164,7 @@ class MeshInMemoryDataset(InMemoryDataset):
     def __init__(self, root, data_config, dataset_type='train',
                  transform=None, pre_transform=None, template=None):
         self._root = root
+        self._data_config = data_config
         self._data_type = data_config['data_type']
         self._dataset_summary = get_dataset_summary(
             data_config, self._data_type)
@@ -180,12 +183,6 @@ class MeshInMemoryDataset(InMemoryDataset):
         self._dataset_type = dataset_type
         self._normalize = data_config['normalize_data']
         self._template = template
-
-        augmentation_factor = data_config['augmentation_factor']
-        if augmentation_factor > 0:
-            self._augment(mode=data_config['augmentation_mode'],
-                          aug_factor=augmentation_factor,
-                          balanced=data_config['augmentation_balanced'])
 
         self._train_names, self._test_names, self._val_names = self.split_data(
             os.path.join(self._precomputed_storage_path, 'data_split.json'))
@@ -265,7 +262,7 @@ class MeshInMemoryDataset(InMemoryDataset):
             test_list = data['test']
             val_list = data['val']
         except FileNotFoundError:
-            all_file_names = self.find_filenames(find_augmented=True)
+            all_file_names = self.find_filenames(find_augmented=False)
             all_file_names.sort()
 
             if self._stratified_split:
@@ -283,6 +280,14 @@ class MeshInMemoryDataset(InMemoryDataset):
                         val_list.append(fname)
                     else:
                         train_list.append(fname)
+
+            data_config = self._data_config
+            augmentation_factor = data_config['augmentation_factor']
+            if augmentation_factor > 0:
+                train_list = self._augment(
+                    train_list, mode=data_config['augmentation_mode'],
+                    aug_factor=augmentation_factor,
+                    balanced=data_config['augmentation_balanced'])
 
             data = {'train': train_list, 'test': test_list, 'val': val_list}
             with open(data_split_list_path, 'w') as fp:
@@ -361,22 +366,23 @@ class MeshInMemoryDataset(InMemoryDataset):
         first_mesh.export(
             os.path.join(self._precomputed_storage_path, 'mean.ply'))
 
-    def _augment(self, mode='interpolate', aug_factor=10, balanced=True,
-                 split_3years=True):
+    def _augment(self, train_list, mode='interpolate', aug_factor=10,
+                 balanced=True, split_3years=True):
         augmented_dir = os.path.join(self._root, 'augmented')
         if os.path.isdir(augmented_dir) and os.listdir(augmented_dir):
             aug_names = os.listdir(augmented_dir)
             n_aug_per_class = {cl: 0 for cl in set([n[0] for n in aug_names])}
-            if self._data_type == 'train':
+            if self._dataset_type == 'train':
                 for name in aug_names:
                     if name.endswith('.obj') or name.endswith('.ply'):
                         n_aug_per_class[name[0]] += 1
+                        train_list.append(os.path.join('augmented', name))
                 print(f"Found data previously augmented -> {n_aug_per_class}")
-        else:
-            initial_list = self.find_filenames(find_augmented=False)
+        elif self._dataset_type == 'train':
+            initial_list = train_list.copy()
 
             if mode == 'spectral_comb' or mode == 'spectral_interp':
-                self._spectral_projections_analysis(initial_list, k=30)
+                # self._spectral_projections_analysis(initial_list, k=30)
                 eigd = compute_laplacian_eigendecomposition(
                     self._template, k=1000)
             else:
@@ -441,6 +447,8 @@ class MeshInMemoryDataset(InMemoryDataset):
 
                     aug_name = name1[:-4] + '_' + name2[2:-4] + aug + name1[-4:]
                     mesh1.export(os.path.join(augmented_dir, aug_name))
+                    train_list.append(os.path.join('augmented', aug_name))
+        return train_list
 
     def _spectral_projections_analysis(self, filenames, k=200,
                                        plot_type='scatter'):
