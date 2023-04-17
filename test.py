@@ -37,7 +37,8 @@ from utils import create_alpha_cmap, plot_confusion_matrix, \
 
 class Tester:
     def __init__(self, model_manager, norm_dict,
-                 train_load, test_load, out_dir, config):
+                 train_load, test_load, postop_load, pairs_load,
+                 out_dir, config):
         self._manager = model_manager
         self._manager.eval()
         self._device = model_manager.device
@@ -47,11 +48,13 @@ class Tester:
         self._config = config
         self._train_loader = train_load
         self._test_loader = test_load
+        self._postop_loader = postop_load
+        self._pairs_loader = pairs_load
         self._is_vae = self._manager.is_vae
         self._is_rae = self._manager.is_rae
         self.latent_stats = self.compute_latent_stats(train_load)
         self._region_ldas = {key: LinearDiscriminantAnalysis(
-            n_components=2, store_covariance=True) for key in
+            n_components=None, store_covariance=True) for key in
             self._manager.latent_regions.keys()}
 
         self._dist_all_attrs_embedding_fig = None
@@ -1105,16 +1108,26 @@ class Tester:
         res = torch.stack(ls)
         return res.t()
 
+    def encode_pairs(self):
+        z_pre, z_post = [], []
+        for data in self._pairs_loader:
+            x_pre, x_post = data.x, data.postop_x
+            z_pre.append(self._manager.encode(x_pre.to(self._device)).cpu())
+            z_post.append(self._manager.encode(x_post.to(self._device)).cpu())
+        return torch.cat(z_pre, dim=0).numpy(), torch.cat(z_post, dim=0).numpy()
+
     def plot_embeddings(self, embedding_mode='lda'):
         tr_z, tr_l = self._manager.train_latents_and_labels
         if tr_z is None:
             tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
         ts_z, ts_l = self._manager.encode_all(self._test_loader, False)
+        po_z, po_l = self._manager.encode_all(self._postop_loader, False)
         tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
         ts_y = np.array(self._manager.class2idx(np.concatenate(ts_l['y'])))
 
         tr_z_np = torch.cat(tr_z, dim=0).numpy()
         ts_z_np = torch.cat(ts_z, dim=0).numpy()
+        po_z_np = torch.cat(po_z, dim=0).numpy()
 
         if embedding_mode == 'lda':
             tr_z_np_2d = self._manager.lda_project_latents_in_2d(tr_z_np)
@@ -1122,9 +1135,23 @@ class Tester:
             x1 = np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 0]
             x2 = np.concatenate([tr_z_np_2d, ts_z_np_2d])[:, 1]
         elif embedding_mode == 'tsne':
-            z_np = np.concatenate([tr_z_np, ts_z_np])
+            # pair_pre_z, pair_post_z = self.encode_pairs()
+            # z_np = np.concatenate([tr_z_np, ts_z_np, po_z_np,
+            #                        pair_pre_z, pair_post_z])
+            z_np = np.concatenate([tr_z_np, ts_z_np, po_z_np])
+            z_pre_limit = tr_z_np.shape[0] + ts_z_np.shape[0]
+            z_post_limit = z_pre_limit + po_z_np.shape[0]
+            # half_pair_limit = z_post_limit + pair_pre_z.shape[0]
+
             z_embedded = TSNE(n_components=2, init='random').fit_transform(z_np)
-            x1, x2 = z_embedded[:, 0], z_embedded[:, 1]
+
+            x1, x2 = z_embedded[:z_pre_limit, 0], z_embedded[:z_pre_limit, 1]
+            x3 = z_embedded[z_pre_limit:z_post_limit, 0]
+            x4 = z_embedded[z_pre_limit:z_post_limit, 1]
+            # x1_pre = z_embedded[z_post_limit:half_pair_limit, 0]
+            # x2_pre = z_embedded[z_post_limit:half_pair_limit, 1]
+            # x1_post = z_embedded[half_pair_limit:, 0]
+            # x2_post = z_embedded[half_pair_limit:, 1]
         else:
             raise NotImplementedError
 
@@ -1138,10 +1165,17 @@ class Tester:
                                       np.concatenate(ts_l['gender'])]),
             'age': np.concatenate([np.concatenate(tr_l['age']),
                                    np.concatenate(ts_l['age'])]),
+            'genotype': np.concatenate([np.concatenate(tr_l['genotype']),
+                                        np.concatenate(ts_l['genotype'])]),
+            'bws_info': np.concatenate([np.concatenate(tr_l['bws_info']),
+                                        np.concatenate(ts_l['bws_info'])]),
         })
 
-        colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81']
-        hue_order = ['n', 'a', 'c', 'm']
+        # colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81']
+        # hue_order = ['n', 'a', 'c', 'm']
+        colours = ['#ed6e5d', '#74bfc2']
+        hue_order = ['n', 'w']
+
         # TRAIN vs TEST
         plt.clf()
         sns.scatterplot(data=df, x='x1', y='x2', hue='class', style='type',
@@ -1220,26 +1254,86 @@ class Tester:
         plt.savefig(os.path.join(self._out_dir,
                                  embedding_mode + '_emb_distributions_a_g.svg'))
 
-        self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l)
+        self.plot_embeddings_per_region(tr_z_np, tr_y, tr_l, embedding_mode,
+                                        po_z_np)
 
-    def plot_embeddings_per_region(self, tr_z_np, tr_y, tr_l):
+        # GENOTYPES and PATIENTS WITH ADDITIONAL INFO
+        with open(fig_name + '.pkl', 'rb') as f:
+            fig_entire_z = pickle.load(f)
+        ax = fig_entire_z.gca()
+
+        sns.scatterplot(data=df.loc[(df['type'] == 'train') & (~df['aug']) &
+                                    (df['class'] == 'w')],
+                        x='x1', y='x2', hue='genotype', ax=ax,
+                        palette=sns.color_palette('tab10', n_colors=4))
+        sns.scatterplot(x=df.loc[df['bws_info'] != 'n/a']['x1'],
+                        y=df.loc[df['bws_info'] != 'n/a']['x2'],
+                        ax=ax, c=['#e881a7'])
+        plt.savefig(os.path.join(
+            self._out_dir, embedding_mode + '_emb_distributions_gtype.svg'))
+
+        # POSTOPs on distribs
+        with open(fig_name + '.pkl', 'rb') as f:
+            fig_entire_z = pickle.load(f)
+        ax = fig_entire_z.gca()
+        sns.scatterplot(x=x3, y=x4, ax=ax, c=['#e881a7'])
+        plt.savefig(os.path.join(
+            self._out_dir, embedding_mode + '_emb_distributions_postop.svg'))
+
+        # Pre-post pairs on distribs
+        # with open(fig_name + '.pkl', 'rb') as f:
+        #     fig_entire_z = pickle.load(f)
+        # ax = fig_entire_z.gca()
+        # sns.scatterplot(x=x1_pre, y=x2_pre, ax=ax,
+        #                 hue=np.arange(x1_pre.shape[0]))
+        # sns.scatterplot(x=x1_post, y=x2_post, ax=ax,
+        #                 hue=np.arange(x1_pre.shape[0]), marker="x")
+        # plt.savefig(os.path.join(
+        #     self._out_dir, embedding_mode + '_emb_distributions_pairs.svg'))
+
+    def plot_embeddings_per_region(self, tr_z_np, tr_y, tr_l, embedding_mode,
+                                   po_z_np=None):
         plt.clf()
+        region_postop_z = {}
         per_region_dfs_list = []
         for key, z_region in self._manager.latent_regions.items():
             if z_region[1] - z_region[0] > 2:
-                tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
+                z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
 
-                try:
-                    z_r_embeddings = self._region_ldas[key].transform(
-                        tr_z_np_region)
-                except NotFittedError:
-                    z_r_embeddings = self._region_ldas[key].fit_transform(
-                        tr_z_np_region, tr_y)
+                if embedding_mode == 'lda':
+                    try:
+                        z_r_embeddings = self._region_ldas[key].transform(
+                            z_np_region)
+                    except NotFittedError:
+                        z_r_embeddings = self._region_ldas[key].fit_transform(
+                            z_np_region, tr_y)
+                    x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
 
-                x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
+                elif embedding_mode == 'tsne':
+                    z_separator = None
+                    if po_z_np is not None:
+                        z_separator = z_np_region.shape[0]
+                        z_np_region = np.concatenate(
+                            [z_np_region, po_z_np[:, z_region[0]:z_region[1]]])
+
+                    z_embedded = TSNE(
+                        n_components=2,
+                        init='random').fit_transform(z_np_region)
+                    if z_separator is None:
+                        x1, x2 = z_embedded[:, 0], z_embedded[:, 1]
+                    else:
+                        x1 = z_embedded[:z_separator, 0]
+                        x2 = z_embedded[:z_separator, 1]
+                        x34 = [z_embedded[z_separator:, 0],
+                               z_embedded[z_separator:, 1]]
+                else:
+                    raise NotImplementedError
             else:
                 x1 = tr_z_np[:, z_region[0]]
                 x2 = tr_z_np[:, z_region[1] - 1]
+
+            if po_z_np is not None:
+                region_postop_z[colour2attribute_dict[key]] = x34
 
             per_region_dfs_list.append(pd.DataFrame({
                 'x1': x1, 'x2': x2,
@@ -1250,8 +1344,11 @@ class Tester:
         df = pd.concat(per_region_dfs_list)
         df.drop(df[df['aug']].index, inplace=True)
 
-        colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81', '#dbcbbe']
-        hue_order = ['n', 'a', 'c', 'm']
+        # colours = ['#ed6e5d', '#74bfc2', '#eecd4a', '#124d81', '#dbcbbe']
+        # hue_order = ['n', 'a', 'c', 'm']
+        colours = ['#ed6e5d', '#74bfc2']
+        hue_order = ['n', 'w']
+
         # also augmented data are scattered
         g = sns.FacetGrid(df, col='region', hue='class', palette=colours,
                           hue_order=hue_order, col_wrap=5, height=2)
@@ -1276,6 +1373,15 @@ class Tester:
         region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
         with open(region_ldas_name, 'wb') as f:
             pickle.dump(self._region_ldas, f)
+
+        if po_z_np is not None:
+            with open(fig_name + '.pkl', 'rb') as f:
+                f_regions = pickle.load(f)
+            for key, z_region in self._manager.latent_regions.items():
+                x3, x4 = region_postop_z[colour2attribute_dict[key]]
+                f_regions.axes_dict[colour2attribute_dict[key]].scatter(
+                    x3, x4, c=['#e881a7'], s=2)
+            plt.savefig(fig_name + '_postop.svg')
 
     def test_classifiers(self):
         plt.clf()
@@ -1402,7 +1508,8 @@ class Tester:
 if __name__ == '__main__':
     import argparse
     import utils
-    from data_generation_and_loading import get_data_loaders
+    from data_generation_and_loading import get_data_loaders, \
+        get_postop_loader, get_pairs_loader
     from model_manager import ModelManager
 
     parser = argparse.ArgumentParser()
@@ -1435,8 +1542,12 @@ if __name__ == '__main__':
 
     manager.set_class_conversions_and_weights(d_classes)
 
+    postop_loader = get_postop_loader(configurations, manager.template)
+    pairs_loader = get_pairs_loader(configurations, manager.template)
+
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
-                    output_directory, configurations)
+                    postop_loader, pairs_loader, output_directory,
+                    configurations)
 
     # tester()
     # tester.fit_mesh(
@@ -1448,7 +1559,8 @@ if __name__ == '__main__':
     #     new_m_landmarks_path="/home/simo/Desktop/NEW_MODELS/Crouzon/3043070/c_3043070_18-12-2019_dummy_20_lnd.txt",
     #     lr=0.01, iterations=200)
     # tester.plot_embeddings(embedding_mode='lda')
-    tester.test_classifiers()
+    tester.plot_embeddings(embedding_mode='tsne')
+    # tester.test_classifiers()
     # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.interpolate_syndrome_to_normal(

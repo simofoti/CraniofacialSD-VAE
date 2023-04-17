@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import pickle
 import tqdm
 import trimesh
 import torch
@@ -9,90 +8,17 @@ import torch
 import numpy as np
 import pandas as pd
 
-from abc import abstractmethod
 from collections import Counter
 from torch.utils.data.dataloader import default_collate
-from torch_geometric.data import Dataset, InMemoryDataset, Data
+from torch_geometric.data import InMemoryDataset, Data
 from sklearn.model_selection import train_test_split
 
 from swap_batch_transform import SwapFeatures
 from utils import (get_dataset_summary, get_age_and_gender_from_summary,
+                   get_genotype_info_and_postop_from_summary,
                    find_data_used_from_summary, interpolate,
                    compute_laplacian_eigendecomposition,
                    spectral_combination, spectral_interpolation)
-
-
-class DataGenerator:
-    def __init__(self, model_dir, data_dir='./data'):
-        self._model_dir = model_dir
-        self._data_dir = data_dir
-
-    def __call__(self, number_of_meshes, weight=1., overwrite_data=False):
-        if not os.path.isdir(self._data_dir):
-            os.mkdir(self._data_dir)
-
-        if not os.listdir(self._data_dir) or overwrite_data:  # directory empty
-            print("Generating Data from PCA")
-            for i in tqdm.tqdm(range(number_of_meshes)):
-                v = self.generate_random_vertices(weight)
-                self.save_vertices(v, str(i))
-
-    def save_vertices(self, vertices, name):
-        if isinstance(vertices, torch.Tensor):
-            vertices = vertices.cpu().numpy()
-        m = trimesh.Trimesh(vertices, process=False)
-        m.export(os.path.join(self._data_dir, name + '.ply'))
-
-    @abstractmethod
-    def generate_random_vertices(self, weight):
-        pass
-
-
-class FaceGenerator(DataGenerator):
-    def __init__(self, uhm_path, data_dir='./data'):
-        super(FaceGenerator, self).__init__(uhm_path, data_dir)
-        infile = open(self._model_dir, 'rb')
-        uhm_dict = pickle.load(infile)
-        infile.close()
-
-        self._components = uhm_dict['Eigenvectors'].shape[1]
-        self._mu = uhm_dict['Mean']
-        self._eigenvectors = uhm_dict['Eigenvectors']
-        self._eigenvalues = uhm_dict['EigenValues']
-
-    def generate_random_vertices(self, weight):
-        w = weight * np.random.normal(size=self._components) * \
-            self._eigenvalues ** 0.5
-        w = np.expand_dims(w, axis=1)
-        vertices = self._mu + self._eigenvectors @ w
-        return vertices.reshape(-1, 3)
-
-
-class BodyGenerator(DataGenerator):
-    """ To install star model see https://github.com/ahmedosman/STAR"""
-    def __init__(self, data_dir='./data'):
-        super(BodyGenerator, self).__init__(None, data_dir)
-        from star.pytorch.star import STAR
-        self._star = STAR(gender='neutral', num_betas=10)
-
-    def generate_random_vertices(self, weight=3):
-        poses = torch.zeros([1, 72])
-        betas = torch.rand([1, self._star.num_betas]) * 2 * weight - weight
-
-        trans = torch.zeros([1, 3])
-        verts = self._star.forward(poses.cuda(), betas.cuda(), trans.cuda())[-1]
-        # Normalize verts in -1, 1 wrt height
-        y_min = torch.min(verts[:, 1])
-        scale = 2 / (torch.max(verts[:, 1]) - y_min)
-        verts[:, 1] -= y_min
-        verts *= scale
-        verts[:, 1] -= 1
-        return verts
-
-    def save_mean_mesh(self):
-        t = trimesh.Trimesh(self._star.v_template.cpu().numpy(),
-                            self._star.f, process=False)
-        t.export(os.path.join(self._data_dir, 'template.ply'))
 
 
 def get_data_loaders(config, template=None):
@@ -126,6 +52,32 @@ def get_data_loaders(config, template=None):
     data_classes_and_weights = train_set.classes_weights
     return train_loader, validation_loader, test_loader, \
         normalization_dict, data_classes_and_weights
+
+
+def get_postop_loader(config, template):
+    data_config = config['data']
+    batch_size = config['optimization']['batch_size']
+
+    postop_set = PostopInMemoryDataset(data_config['dataset_path'],
+                                       data_config, template=template)
+
+    swapper = SwapFeatures(template) if data_config['swap_features'] else None
+
+    return MeshLoader(postop_set, batch_size, shuffle=True,
+                      drop_last=True, feature_swapper=swapper,
+                      num_workers=data_config['number_of_workers'])
+
+
+def get_pairs_loader(config, template):
+    data_config = config['data']
+    batch_size = config['optimization']['batch_size']
+
+    pairs_set = PairsInMemoryDataset(data_config['dataset_path'],
+                                     data_config, template=template)
+
+    return MeshLoader(pairs_set, batch_size, shuffle=True,
+                      drop_last=True, feature_swapper=None,
+                      num_workers=data_config['number_of_workers'])
 
 
 class MeshLoader(torch.utils.data.DataLoader):
@@ -281,6 +233,18 @@ class MeshInMemoryDataset(InMemoryDataset):
                     else:
                         train_list.append(fname)
 
+            # For manual modification of data split
+            # Comment and uncomment previous and following part
+            # data = {'train': train_list, 'test': test_list, 'val': val_list}
+            # with open(data_split_list_path[:-5] + "_tmp.json", 'w') as fp:
+            #     json.dump(data, fp)
+            #
+            # with open(data_split_list_path[:-5] + "_tmp.json", 'r') as fp:
+            #     data = json.load(fp)
+            # train_list = data['train']
+            # test_list = data['test']
+            # val_list = data['val']
+
             data_config = self._data_config
             augmentation_factor = data_config['augmentation_factor']
             if augmentation_factor > 0:
@@ -297,10 +261,14 @@ class MeshInMemoryDataset(InMemoryDataset):
     def load_mesh(self, filename, show=False):
         mesh_path = os.path.join(self._root, filename)
         mesh = trimesh.load_mesh(mesh_path, process=False)
-        mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
+        if 'aug' in filename:
+            mesh_vertices = mesh.vertices
+        else:
+            mesh_vertices = mesh.vertices[self._template.mask_verts]
+        mesh_verts = torch.tensor(mesh_vertices, dtype=torch.float,
                                   requires_grad=False)
         if show:
-            tm = trimesh.Trimesh(vertices=mesh.vertices,
+            tm = trimesh.Trimesh(vertices=mesh_vertices,
                                  faces=self._template.face.t().cpu().numpy())
             tm.show()
         return mesh_verts
@@ -339,11 +307,18 @@ class MeshInMemoryDataset(InMemoryDataset):
             age, gender = get_age_and_gender_from_summary(
                 self._dataset_summary, fname[:-4])
 
+            genotype, info, postop_id = \
+                get_genotype_info_and_postop_from_summary(
+                    self._dataset_summary, fname[:-4])
+
+            p_x = self.load_mesh(postop_id) if postop_id != 'none' else None
+
             y = fname.split('/')[1][0] if '/' in fname else fname[0]
             y = 'n' if y == 'b' else y
             data = Data(x=mesh_verts, y=y,
                         augmented=('aug' in fname),
-                        age=age, gender=gender)
+                        age=age, gender=gender,
+                        genotype=genotype, bws_info=info, postop_x=p_x)
 
             if self.pre_transform is not None:
                 data = self.pre_transform(data)
@@ -430,8 +405,8 @@ class MeshInMemoryDataset(InMemoryDataset):
                     path2 = os.path.join(self._root, name2)
                     mesh1 = trimesh.load_mesh(path1, process=False)
                     mesh2 = trimesh.load_mesh(path2, process=False)
-                    x1 = np.array(mesh1.vertices)
-                    x2 = np.array(mesh2.vertices)
+                    x1 = np.array(mesh1.vertices)[self._template.mask_verts]
+                    x2 = np.array(mesh2.vertices)[self._template.mask_verts]
 
                     if mode == 'spectral_comb':
                         aug = '_spectral_comb' + str(i)
@@ -443,10 +418,14 @@ class MeshInMemoryDataset(InMemoryDataset):
                         interpolation_value = np.random.uniform(size=1).item()
                         aug = '_interp' + f'{interpolation_value:.2f}'
                         x_aug = interpolate(x1, x2, interpolation_value)
-                    mesh1.vertices = x_aug
 
+                    aug_mesh = trimesh.Trimesh(
+                        vertices=x_aug,
+                        faces=self._template.face.t().cpu().numpy(),
+                        process=False
+                    )
                     aug_name = name1[:-4] + '_' + name2[2:-4] + aug + name1[-4:]
-                    mesh1.export(os.path.join(augmented_dir, aug_name))
+                    aug_mesh.export(os.path.join(augmented_dir, aug_name))
                     train_list.append(os.path.join('augmented', aug_name))
         return train_list
 
@@ -480,7 +459,8 @@ class MeshInMemoryDataset(InMemoryDataset):
                         self._dataset_summary, name[:-4])
 
                     mesh = trimesh.load_mesh(path, process=False)
-                    spectral_proj = u.T @ np.array(mesh.vertices)
+                    x = np.array(mesh.vertices)[self._template.mask_verts]
+                    spectral_proj = u.T @ x
                     spectral_proj -= spectral_proj_template
 
                     x = np.arange(1, k + 1)
@@ -491,7 +471,7 @@ class MeshInMemoryDataset(InMemoryDataset):
                     line_colour[-1] = 0.7
 
                     # line_colour = 'b' if gender == 'M' else 'r'
-                    line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
+                    # line_colour = 'darkslategrey' if age > 12 * 4 else 'coral'
 
                     n = 'H' if c == 'n' else c.upper()
                     if plot_type == 'line':
@@ -521,6 +501,186 @@ class MeshInMemoryDataset(InMemoryDataset):
             ax.label_outer()
         plt.savefig(os.path.join(self._root, "processed",
                                  "spectral_proj_analysis.svg"))
+
+
+class PostopInMemoryDataset(InMemoryDataset):
+    def __init__(self, root, data_config,
+                 transform=None, pre_transform=None, template=None):
+        self._root = root
+        self._data_config = data_config
+        self._data_type = data_config['data_type']
+        self._dataset_summary = get_dataset_summary(
+            data_config, self._data_type)
+        self._data_to_use = list(self._dataset_summary.loc[
+            self._dataset_summary["PrePost"] == "Post"]['mesh_name'])
+
+        self._postop_data = self.find_filenames()
+
+        self._normalize = data_config['normalize_data']
+        self._template = template
+
+        self._normalization_dict = torch.load(os.path.join(
+            data_config['precomputed_path'], 'norm.pt'))
+        self.mean = self._normalization_dict['mean']
+        self.std = self._normalization_dict['std']
+
+        super(PostopInMemoryDataset, self).__init__(
+            root, transform, pre_transform)
+
+        self.data, self.slices = torch.load(self.processed_paths[0])
+        if self.transform:
+            self.data = [self.transform(td) for td in self.data]
+
+    @property
+    def raw_file_names(self):
+        return 'postop_mesh_data.zip'
+
+    @property
+    def processed_file_names(self):
+        return ['postop.pt']
+
+    @property
+    def normalization_dict(self):
+        return self._normalization_dict
+
+    def download(self):
+        pass
+
+    def find_filenames(self):
+        files = []
+        for dirpath, _, fnames in os.walk(self._root):
+            for f in fnames:
+                if f.endswith('.ply') or f.endswith('.obj'):
+                    if 'aug' not in dirpath and f[:-4] in self._data_to_use:
+                        files.append(f)
+        return files
+
+    def load_mesh(self, filename):
+        mesh_path = os.path.join(self._root, filename)
+        mesh = trimesh.load_mesh(mesh_path, process=False)
+
+        mesh_vertices = mesh.vertices[self._template.mask_verts]
+        mesh_verts = torch.tensor(mesh_vertices, dtype=torch.float,
+                                  requires_grad=False)
+        return mesh_verts
+
+    def process(self):
+        dataset = []
+        for fname in tqdm.tqdm(self._postop_data):
+            mesh_verts = self.load_mesh(fname)
+
+            if self._normalize:
+                mesh_verts = (mesh_verts - self.mean) / self.std
+
+            age, gender = get_age_and_gender_from_summary(
+                self._dataset_summary, fname[:-4])
+
+            genotype, info, postop_id = \
+                get_genotype_info_and_postop_from_summary(
+                    self._dataset_summary, fname[:-4])
+
+            p_x = self.load_mesh(postop_id) if postop_id != 'none' else None
+
+            y = fname.split('/')[1][0] if '/' in fname else fname[0]
+            y = 'n' if y == 'b' else y
+
+            assert y != 'n'  # healthy people do not have surgery!
+
+            data = Data(x=mesh_verts, y=y,
+                        augmented=('aug' in fname),
+                        age=age, gender=gender,
+                        genotype=genotype, bws_info=info, postop_x=p_x)
+
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
+
+            dataset.append(data)
+
+        torch.save(self.collate(dataset), self.processed_paths[0])
+
+
+class PairsInMemoryDataset(InMemoryDataset):
+    def __init__(self, root, data_config,
+                 transform=None, pre_transform=None, template=None):
+        self._root = root
+        self._data_config = data_config
+        self._data_type = data_config['data_type']
+        self._dataset_summary = get_dataset_summary(
+            data_config, self._data_type)
+        self._data_to_use = list(self._dataset_summary.loc[
+            self._dataset_summary["PostID"].notnull()]['mesh_name'])
+
+        self._preop_data = self.find_filenames()
+
+        self._normalize = data_config['normalize_data']
+        self._template = template
+
+        self._normalization_dict = torch.load(os.path.join(
+            data_config['precomputed_path'], 'norm.pt'))
+        self.mean = self._normalization_dict['mean']
+        self.std = self._normalization_dict['std']
+
+        super(PairsInMemoryDataset, self).__init__(
+            root, transform, pre_transform)
+
+        self.data, self.slices = torch.load(self.processed_paths[0])
+        if self.transform:
+            self.data = [self.transform(td) for td in self.data]
+
+    @property
+    def raw_file_names(self):
+        return 'pairs_mesh_data.zip'
+
+    @property
+    def processed_file_names(self):
+        return ['pairs.pt']
+
+    @property
+    def normalization_dict(self):
+        return self._normalization_dict
+
+    def download(self):
+        pass
+
+    def find_filenames(self):
+        files = []
+        for dirpath, _, fnames in os.walk(self._root):
+            for f in fnames:
+                if f.endswith('.ply') or f.endswith('.obj'):
+                    if 'aug' not in dirpath and f[:-4] in self._data_to_use:
+                        files.append(f)
+        return files
+
+    def load_mesh(self, filename):
+        mesh_path = os.path.join(self._root, filename)
+        mesh = trimesh.load_mesh(mesh_path, process=False)
+
+        mesh_vertices = mesh.vertices[self._template.mask_verts]
+        mesh_verts = torch.tensor(mesh_vertices, dtype=torch.float,
+                                  requires_grad=False)
+        return mesh_verts
+
+    def process(self):
+        dataset = []
+        for fname in tqdm.tqdm(self._preop_data):
+            mesh_verts = self.load_mesh(fname)
+
+            if self._normalize:
+                mesh_verts = (mesh_verts - self.mean) / self.std
+
+            _, _, postop_id = get_genotype_info_and_postop_from_summary(
+                self._dataset_summary, fname[:-4])
+
+            p_x = self.load_mesh(postop_id)
+
+            data = Data(x=mesh_verts, postop_x=p_x)
+
+            if self.pre_transform is not None:
+                data = self.pre_transform(data)
+
+            dataset.append(data)
+
+        torch.save(self.collate(dataset), self.processed_paths[0])
 
 
 if __name__ == '__main__':

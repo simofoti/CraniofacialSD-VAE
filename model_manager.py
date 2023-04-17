@@ -44,7 +44,8 @@ class ModelManager(torch.nn.Module):
         self.to_mm_const = configurations['data']['to_mm_constant']
         self.device = device
         self.template = utils.load_template(
-            configurations['data']['template_path'])
+            configurations['data']['template_path'],
+            configurations['data']['attribute_to_remove'])
 
         low_res_templates, down_transforms, up_transforms = \
             self._precompute_transformations(show_meshes=False)
@@ -159,7 +160,7 @@ class ModelManager(torch.nn.Module):
 
             self.classifier_svm = svm.LinearSVC(class_weight='balanced')
             self.lda = discriminant_analysis.LinearDiscriminantAnalysis(
-                n_components=2, store_covariance=True)
+                n_components=None, store_covariance=True)
             self.qda = discriminant_analysis.QuadraticDiscriminantAnalysis(
                 store_covariance=True)
         else:
@@ -551,7 +552,8 @@ class ModelManager(torch.nn.Module):
     @torch.no_grad()
     def encode_all(self, data_loader, is_train_loader=True):
         latents_list = []
-        dict_labels_lists = {'y': [], 'age': [], 'gender': [], 'augmented': []}
+        dict_labels_lists = {'y': [], 'age': [], 'gender': [], 'augmented': [],
+                             'genotype': [], 'bws_info': []}
         for data in data_loader:
             if self._swap_features:
                 b_ids = self._batch_diagonal_idx
@@ -559,13 +561,17 @@ class ModelManager(torch.nn.Module):
                 labels = {'y': np.array(data.y)[b_ids],
                           'age': data.age[b_ids, 0],
                           'gender': np.array(data.gender)[b_ids],
-                          'augmented': data.augmented[b_ids, 0]}
+                          'augmented': data.augmented[b_ids, 0],
+                          'genotype': np.array(data.genotype)[b_ids, 0],
+                          'bws_info': np.array(data.bws_info)[b_ids]}
             else:
                 x = data.x
                 labels = {'y': data.y,
                           'age': data.age[:, 0],
                           'gender': data.gender,
-                          'augmented': data.augmented[:, 0]}
+                          'augmented': data.augmented[:, 0],
+                          'genotype': data.genotype[:, 0],
+                          'bws_info': data.bws_info}
             latents_list.append(self.encode(x.to(self.device)).detach().cpu())
             for k, lbs in labels.items():
                 dict_labels_lists[k].append(lbs)

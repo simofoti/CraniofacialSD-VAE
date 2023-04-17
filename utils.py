@@ -9,6 +9,7 @@ import torch_geometric.transforms
 import networkx as nx
 import numpy as np
 import seaborn as sns
+import pandas as pd
 import matplotlib.pyplot as plt
 from collections import Counter
 from torch_geometric.data import Data
@@ -73,16 +74,31 @@ def prepare_sub_folder(output_directory):
     return checkpoint_directory
 
 
-def load_template(mesh_path):
+def load_template(mesh_path, attribute_to_remove=None):
     mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
     feat_and_cont = extract_feature_and_contour_from_colour(mesh)
+
+    mask_save = np.ones(mesh.vertices.shape[0], dtype=bool)
+    if attribute_to_remove != 'none':
+        a2r = attribute_to_remove
+        feat_and_cont[a2r]['feature'] += feat_and_cont[a2r]['contour']
+        feat_and_cont[a2r]['feature'].sort()
+        mesh_verts, mesh_faces, mask_save = remove_mesh_vertices(
+            mesh.vertices, mesh.faces, feat_and_cont[a2r]['feature']
+        )
+        mesh = trimesh.Trimesh(
+            mesh_verts, mesh_faces,
+            vertex_colors=mesh.visual.vertex_colors[mask_save],
+            process=False)
+        feat_and_cont = extract_feature_and_contour_from_colour(mesh)
+
     mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
                               requires_grad=False)
     face = torch.from_numpy(mesh.faces).t().to(torch.long).contiguous()
     mesh_colors = torch.tensor(mesh.visual.vertex_colors,
                                dtype=torch.float, requires_grad=False)
     data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
-                feat_and_cont=feat_and_cont)
+                feat_and_cont=feat_and_cont, mask_verts=mask_save)
     data = torch_geometric.transforms.FaceToEdge(False)(data)
     data.laplacian = torch.sparse_coo_tensor(
         *get_laplacian(data.edge_index, normalization='rw'))
@@ -130,25 +146,6 @@ def extract_feature_and_contour_from_colour(colored):
                 features[most_common]['contour'].append(idx)
     for e in elem_to_remove:
         features.pop(e, None)
-
-    # with b map
-    # 0=eyes, 1=ears, 2=sides, 3=neck, 4=back, 5=mouth, 6=forehead,
-    # 7=cheeks 8=cheekbones, 9=forehead, 10=jaw, 11=nose
-    # key = list(features.keys())[11]
-    # feature_idx = features[key]['feature']
-    # contour_idx = features[key]['contour']
-
-    # find surroundings
-    # all_distances = self.compute_minimum_distances(
-    #     colored.vertices, colored.vertices[contour_idx]
-    # )
-    # max_distance = max(all_distances)
-    # all_distances[feature_idx] = max_distance
-    # all_distances[contour_idx] = max_distance
-    # threshold = 0.005
-    # surrounding_idx = np.squeeze(np.argwhere(all_distances < threshold))
-    # colored.visual.vertex_colors[surrounding_idx] = [0, 0, 0, 255]
-    # colored.show()
     return features
 
 
@@ -217,6 +214,7 @@ def get_dataset_summary(data_config, data_type):
         d_summary.loc[d_summary['Dataset'] == 'Muenke', 'mesh_name'] = 'm'
         d_summary.loc[d_summary['Dataset'] == 'LSFM', 'mesh_name'] = 'n'
         d_summary.loc[d_summary['Dataset'] == 'LYHM', 'mesh_name'] = 'n'
+        d_summary.loc[d_summary['Dataset'] == 'BWS', 'mesh_name'] = 'w'
         id_column = 'ID' if data_type == 'heads' else 'PID'
         d_summary['mesh_name'] = d_summary['mesh_name'] + '_' + \
             d_summary[id_column].fillna(-1).astype(int).astype(str)
@@ -230,7 +228,8 @@ def find_data_used_from_summary(summary, data_type):
         return None
     else:
         cond_column = "Head Used" if data_type == 'heads' else "Face Used"
-        ids_to_use = summary.loc[summary[cond_column] == 'y']['mesh_name']
+        ids_to_use = summary.loc[(summary[cond_column] == 'y') &
+                                 (summary["PrePost"] == "Pre")]['mesh_name']
         return list(ids_to_use)
 
 
@@ -246,6 +245,25 @@ def get_age_and_gender_from_summary(summary, mesh_id):
     except IndexError:  # should be triggered by augmented meshes
         age, gender = -1, 'n/a'
     return age, gender
+
+
+def get_genotype_info_and_postop_from_summary(summary, mesh_id):
+    try:
+        id_column = summary['mesh_name']
+        genotype = summary.loc[id_column == mesh_id]['GenotypeID'].values[0]
+        info = summary.loc[id_column == mesh_id]['AdditionalInfo'].values[0]
+        postop_id = summary.loc[id_column == mesh_id]['PostID'].values[0]
+
+        if np.isnan(genotype):
+            genotype = -1
+        if pd.isnull(info):
+            info = 'n/a'
+        if pd.isnull(postop_id):
+            postop_id = 'none'
+
+    except IndexError:  # should be triggered by augmented meshes
+        genotype, info, postop_id = -1, 'n/a', 'none'
+    return genotype, info, postop_id
 
 
 def interpolate(x1, x2, value=0.5):
@@ -323,3 +341,31 @@ def plot_confusion_matrix(data, labels, output_filename):
 
     plt.savefig(output_filename, bbox_inches='tight', dpi=300)
     plt.close()
+
+
+def remove_mesh_vertices(v_original, f_original, v_idxs_to_remove):
+    keep_v_mask = np.ones(v_original.shape[0], dtype=bool)
+    keep_v_mask[v_idxs_to_remove] = 0
+
+    # remove faces containing a vertex that needs to be removed
+    remove_f_idxs = []
+    for v_idx in v_idxs_to_remove:
+        indices = np.argwhere(f_original == v_idx)[:, 0]
+        remove_f_idxs.extend(indices.tolist())
+    remove_f_idxs = sorted(list(dict.fromkeys(remove_f_idxs)))
+    keep_f_mask = np.ones(f_original.shape[0], dtype=bool)
+    keep_f_mask[remove_f_idxs] = 0
+    updated_faces = f_original[keep_f_mask, :]
+
+    # remove vertices
+    new_vertices = v_original[keep_v_mask]
+
+    # update indices of faces with new vertex indexing
+    val_old = np.argwhere(keep_v_mask == 1)[:, 0]
+    val_new = np.arange(0, np.sum(keep_v_mask))
+    arr = np.empty(updated_faces.max() + 1, dtype=val_new.dtype)
+    arr[val_old] = val_new
+    new_faces = arr[updated_faces]
+
+    return new_vertices, new_faces, keep_v_mask
+

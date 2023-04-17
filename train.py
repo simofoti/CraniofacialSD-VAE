@@ -6,7 +6,6 @@ import torch.nn
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from data_generation_and_loading import FaceGenerator, BodyGenerator
 from data_generation_and_loading import get_data_loaders
 from model_manager import ModelManager
 from test import Tester
@@ -16,7 +15,6 @@ parser.add_argument('--config', type=str, default='configurations/default.yaml',
                     help="Path to the configuration file.")
 parser.add_argument('--id', type=str, default='none', help="ID of experiment")
 parser.add_argument('--output_path', type=str, default='.', help="outputs path")
-parser.add_argument('--generate_data', action='store_true')
 parser.add_argument('--resume', action='store_true')
 opts = parser.parse_args()
 config = utils.get_config(opts.config)
@@ -36,15 +34,6 @@ if not torch.cuda.is_available():
     print("GPU not available, running on CPU")
 else:
     device = torch.device('cuda')
-
-if opts.generate_data:
-    if config['data']['dataset_type'] == 'faces':
-        data_generator = FaceGenerator(config['data']['pca_path'],
-                                       config['data']['dataset_path'])
-    else:
-        data_generator = BodyGenerator(config['data']['dataset_path'])
-    data_generator(config['data']['number_of_meshes'],
-                   config['data']['std_pca_latent'], opts.generate_data)
 
 manager = ModelManager(
     configurations=config, device=device,
@@ -67,25 +56,25 @@ if opts.resume:
 else:
     start_epoch = 0
 
-for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
-    manager.run_epoch(train_loader, device, train=True)
-    manager.log_losses(writer, epoch, 'train')
-
-    manager.run_epoch(validation_loader, device, train=False)
-    manager.log_losses(writer, epoch, 'validation')
-
-    if (epoch + 1) % config['logging_frequency']['tb_renderings'] == 0:
-        manager.log_images(train_visualization_batch, writer, epoch,
-                           normalization_dict, 'train', error_max_scale=2)
-        manager.log_images(validation_visualization_batch, writer, epoch,
-                           normalization_dict, 'validation', error_max_scale=2)
-    if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
-        manager.save_weights(checkpoint_dir, epoch)
-        tester.per_variable_range_experiments(use_z_stats=False,
-                                              save_suffix=str(epoch + 1))
-
-if manager.is_rae:
-    manager.fit_gaussian_mixture(train_loader)
+# for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
+#     manager.run_epoch(train_loader, device, train=True)
+#     manager.log_losses(writer, epoch, 'train')
+#
+#     manager.run_epoch(validation_loader, device, train=False)
+#     manager.log_losses(writer, epoch, 'validation')
+#
+#     if (epoch + 1) % config['logging_frequency']['tb_renderings'] == 0:
+#         manager.log_images(train_visualization_batch, writer, epoch,
+#                            normalization_dict, 'train', error_max_scale=2)
+#         manager.log_images(validation_visualization_batch, writer, epoch,
+#                            normalization_dict, 'validation', error_max_scale=2)
+#     if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
+#         manager.save_weights(checkpoint_dir, epoch)
+#         tester.per_variable_range_experiments(use_z_stats=False,
+#                                               save_suffix=str(epoch + 1))
+#
+# if manager.is_rae:
+#     manager.fit_gaussian_mixture(train_loader)
 
 manager.train_and_validate_classifiers(train_loader, validation_loader,
                                        writer, checkpoint_dir)

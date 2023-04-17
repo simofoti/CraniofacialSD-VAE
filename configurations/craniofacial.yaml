@@ -1,10 +1,10 @@
 data:
-  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template_sym2_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
-  dataset_summary_path: /media/simo/DATASHURPRO/for_simone/full_dataset_summary.xlsx
-  precomputed_path: precomputed_craniofacial
+  template_path: /home/simo/Develop/id-generator/precomputed_craniofacial_bws/template_sym2_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
+  dataset_summary_path: /media/simo/DATASHURPRO/TiaBWS/0-BWS.xlsx
+  precomputed_path: precomputed_craniofacial_bws
   data_type: heads                                                              # {heads, faces}
   stratified_split: True
-  dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes
+  dataset_path: /media/simo/DATASHURPRO/TiaBWS
   augmentation_mode: spectral_interp                                            # {interpolate, spectral_interp, spectral_comb}
   augmentation_factor: 5
   augmentation_balanced: True                                                   # if True, total meshes are the same across classes. If False, meshes of each class are augmented by augmentation_factor
@@ -12,9 +12,10 @@ data:
   to_mm_constant: 89.11                                                         # if already in mm set to 1, otherwise set proper multiplicative constant
   number_of_workers: 8
   swap_features: True                                                           # if True, the resulting batch size will be batch_size^2
+  attribute_to_remove: "[245 160 106 255]"                                      # The RGBA colour on the template should be used. Check utils.py for correspondences.
 
 optimization:
-  epochs: 600
+  epochs: 800
   batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
   lr: 1e-4
   weight_decay: 0
@@ -49,7 +50,7 @@ model:
     dilation: [1, 1, 1, 1]                                                      # spiral dilation for each convolution. Delete precomputed file if changed.
   in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
   out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
-  latent_size: 75                                                               # size of the latent vector
+  latent_size: 70                                                               # size of the latent vector
   pre_z_sigmoid: False
 
 classifier:
