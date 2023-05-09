@@ -8,7 +8,7 @@ from torch_geometric.data import Data
 
 import utils
 from model_manager import ModelManager
-from swap_batch_transform import SwapFeatures
+from swap_batch_transform import OriginalSwapFeatures
 
 
 def add_vert_colors(verts, color):
@@ -16,16 +16,18 @@ def add_vert_colors(verts, color):
     return torch.cat([verts, v_colors], dim=-1)
 
 
-data_path = 'vertices_of_faces_from_UHM'
-data_split_list_path = './precomputed/data_split.json'
+data_path = '/media/simo/DATASHURPRO/for_simone/head_face_meshes'
+data_split_list_path = './precomputed_craniofacial_new/data_split.json'
 with open(data_split_list_path, 'r') as fp:
     data = json.load(fp)
 train_list = data['train']
+# select only healthy and not augmented
+train_list = [n for n in train_list if 'n_' in n and 'aug' not in n]
 
 vertices = []
 for i in range(4):
-    path = os.path.join(data_path, random.choice(train_list) + '.ply')
-    mesh = trimesh.load_mesh(path, 'ply', process=False)
+    path = os.path.join(data_path, random.choice(train_list))
+    mesh = trimesh.load_mesh(path, process=False)
     vertices.append(torch.tensor(mesh.vertices, dtype=torch.float,
                                  requires_grad=False))
 
@@ -36,12 +38,12 @@ vertices[3] = add_vert_colors(vertices[3], [114, 191, 193])
 
 batch = Data(x=torch.stack(vertices))
 
-config = utils.get_config('configurations/default.yaml')
+config = utils.get_config('configurations/craniofacial.yaml')
 manager = ModelManager(configurations=config, device='cpu')
 
-swapped_batch = SwapFeatures(manager.template)(batch)
+swapped_batch = OriginalSwapFeatures(manager.template)(batch)
 
-out_mesh_dir = 'outputs/in_batch'
+out_mesh_dir = 'outputs/craniofacial/in_batch'
 if not os.path.isdir(out_mesh_dir):
     os.mkdir(out_mesh_dir)
 
