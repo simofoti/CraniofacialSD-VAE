@@ -845,6 +845,8 @@ class Tester:
 
     def interpolate_syndrome_to_normal(self, patient_fname):
         z_p = self._load_and_encode(patient_fname)
+        if 'augmented/' in patient_fname:
+            patient_fname = patient_fname[len('augmented/'):]
 
         # Find normal patients latent vectors
         normal_p_index = self._manager.class2idx('n')
