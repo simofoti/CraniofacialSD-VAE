@@ -32,7 +32,7 @@ from matplotlib.cm import get_cmap
 
 from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 from utils import create_alpha_cmap, plot_confusion_matrix, \
-    procedures2attributes_dict, colour2attribute_dict
+    procedures2attributes_dict, colour2attribute_dict, plot_2d_arrow
 
 
 class Tester:
@@ -833,10 +833,13 @@ class Tester:
         im = make_grid(renderings, padding=10, pad_value=1, nrow=len(features))
         save_image(im, os.path.join(self._out_dir, 'interpolate_all.png'))
 
-    def _load_and_encode(self, patient_fname):
-        meshes_root = self._test_loader.dataset.root
-        mesh_path = os.path.join(meshes_root, patient_fname)
-        mesh = trimesh.load_mesh(mesh_path, 'obj', process=False)
+    def _load_and_encode(self, patient_fname=None, mesh_path=None):
+        if mesh_path is None:
+            assert patient_fname is not None
+            meshes_root = self._test_loader.dataset.root
+            mesh_path = os.path.join(meshes_root, patient_fname)
+
+        mesh = trimesh.load_mesh(mesh_path, process=False)
         mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
                                   requires_grad=False, device='cpu')
         v_p = (mesh_verts - self._norm_dict['mean']) / self._norm_dict['std']
@@ -1098,6 +1101,56 @@ class Tester:
                 x1, x2, c=['#e881a7'], s=2)
         fig_fgrid_regions_z.fig.savefig(
             os.path.join(out_interp_dir, patient_fname[:-4] + '_emb_r.svg'))
+
+    def classify_and_project_pre_post_pair(self, pre_path, post_path):
+        z_pre = self._load_and_encode(mesh_path=pre_path)
+        z_post = self._load_and_encode(mesh_path=post_path)
+        print(f"pre class: {self._manager.classify_latent(z_pre, 'qda')}")
+        print(f"post class: {self._manager.classify_latent(z_post, 'qda')}")
+
+        fig_entire_z_name = os.path.join(self._out_dir,
+                                         'lda_emb_distributions.pkl')
+        with open(fig_entire_z_name, 'rb') as f:
+            fig_entire_z = pickle.load(f)
+
+        z_pre_proj = self._manager.lda_project_latents_in_2d(
+            z_pre.detach().cpu().numpy())
+        z_post_proj = self._manager.lda_project_latents_in_2d(
+            z_post.detach().cpu().numpy())
+
+        ax = fig_entire_z.gca()
+        sns.scatterplot(x=z_pre_proj[:, 0], y=z_pre_proj[:, 1],
+                        ax=ax, c=['#e881a7'])
+        sns.scatterplot(x=z_post_proj[:, 0], y=z_post_proj[:, 1],
+                        ax=ax, c=['#a34D7a'])
+        plot_2d_arrow(tail_coords=z_pre_proj, head_coords=z_post_proj, ax=ax)
+        fig_entire_z.savefig(post_path[:-4] + '_emb.svg')
+
+        fig_regions_z_name = os.path.join(self._out_dir,
+                                          'emb_all_train_dist.pkl')
+        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
+        with open(fig_regions_z_name, 'rb') as f:
+            fig_fgrid_regions_z = pickle.load(f)
+        with open(region_ldas_name, 'rb') as f:
+            self._region_ldas = pickle.load(f)
+        z_pre_np = z_pre.detach().cpu().numpy()
+        z_post_np = z_post.detach().cpu().numpy()
+        for key, z_region in self._manager.latent_regions.items():
+            z_pre_region = z_pre_np[:, z_region[0]:z_region[1]]
+            z_post_region = z_post_np[:, z_region[0]:z_region[1]]
+            z_pre_embeddings = self._region_ldas[key].transform(z_pre_region)
+            z_post_embeddings = self._region_ldas[key].transform(z_post_region)
+            fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]].scatter(
+                z_pre_embeddings[:, 0], z_pre_embeddings[:, 1],
+                c=['#e881a7'], s=2)
+            fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]].scatter(
+                z_post_embeddings[:, 0], z_post_embeddings[:, 1],
+                c=['#a34D7a'], s=2)
+            plot_2d_arrow(
+                tail_coords=z_pre_embeddings, head_coords=z_post_embeddings,
+                ax=fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]],
+                scale=1)
+        fig_fgrid_regions_z.fig.savefig(post_path[:-4] + '_emb_r.svg')
 
     @staticmethod
     def vector_linspace(start, finish, steps):
@@ -1450,7 +1503,11 @@ if __name__ == '__main__':
     #     new_m_landmarks_path="/home/simo/Desktop/NEW_MODELS/Crouzon/3043070/c_3043070_18-12-2019_dummy_20_lnd.txt",
     #     lr=0.01, iterations=200)
     # tester.plot_embeddings(embedding_mode='lda')
-    tester.test_classifiers()
+    # tester.test_classifiers()
+    tester.classify_and_project_pre_post_pair(
+        pre_path="/media/simo/DATASHURPRO/for_simone/head_face_meshes/a_6.obj",
+        post_path="/media/simo/DATASHURPRO/apert_fitted_meshes/929805_Post_Op.ply",
+    )
     # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.interpolate_syndrome_to_normal(

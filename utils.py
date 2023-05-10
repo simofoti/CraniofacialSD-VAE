@@ -10,6 +10,7 @@ import networkx as nx
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from collections import Counter
 from torch_geometric.data import Data
 from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix
@@ -323,3 +324,12 @@ def plot_confusion_matrix(data, labels, output_filename):
 
     plt.savefig(output_filename, bbox_inches='tight', dpi=300)
     plt.close()
+
+
+def plot_2d_arrow(tail_coords, head_coords, ax, color='#e881a7', scale=15):
+    tail_coords = np.squeeze(tail_coords)
+    head_coords = np.squeeze(head_coords)
+    arrow = mpatches.FancyArrowPatch(tail_coords, head_coords,
+                                     color=color, arrowstyle='-|>',
+                                     mutation_scale=scale)
+    ax.add_patch(arrow)
