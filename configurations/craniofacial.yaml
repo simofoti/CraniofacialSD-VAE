@@ -26,20 +26,6 @@ optimization:
   latent_consistency_eta1: 0.5
   latent_consistency_eta2: 0.5
 
-  rae_weight: 0                                                                 # if 0, no Regularized AE (RAE). If > 0 kl, dip, and factor weights must be 0
-  rae_embedding: 1e-4
-  rae_grad_penalty: 0.5e-7                                                      # If 0, L2 normalization is used and must set rae_gen_weight_decay. Default for GP: 0.5e-7
-  rae_gen_weight_decay: 1e-7                                                    # Ignored if rae_grad_penalty > 0
-  rae_n_gaussians: 10
-  rae_gmm_mean_initialization: True                                             # if True, rae_n_gaussians automatically set to number of classed
-
-  dip_weight: 0                                                                 # if 0, no dip loss is used
-  dip_type: i
-  dip_diag_lambda: 0.05
-  dip_offdiag_lambda: 0.1
-
-  factor_weight: 0                                                              # if 0, no factor VAE
-
 model:
   sampling:
     type: basic                                                                 # {basic, r_weighted}. Delete precomputed file if changed

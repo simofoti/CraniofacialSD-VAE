@@ -5,10 +5,8 @@ import trimesh
 import tqdm
 
 import numpy as np
-import seaborn as sns
 
-from sklearn import mixture, svm, discriminant_analysis
-from torch.nn.functional import cross_entropy
+from sklearn import svm, discriminant_analysis
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 from pytorch3d.structures import Meshes
@@ -29,7 +27,7 @@ from pytorch3d.renderer import (
 import utils
 from mesh_simplification import MeshSimplifier
 from compute_spirals import preprocess_spiral
-from model import Model, FactorVAEDiscriminator, MLPClassifier
+from model import Model, MLPClassifier
 
 
 class ModelManager(torch.nn.Module):
@@ -57,9 +55,6 @@ class ModelManager(torch.nn.Module):
         self._w_laplacian_loss = float(
             self._optimization_params['laplacian_weight'])
         self._w_kl_loss = float(self._optimization_params['kl_weight'])
-        self._w_rae_loss = float(self._optimization_params['rae_weight'])
-        self._w_dip_loss = float(self._optimization_params['dip_weight'])
-        self._w_factor_loss = float(self._optimization_params['factor_weight'])
 
         self._net = Model(in_channels=self._model_params['in_channels'],
                           out_channels=self._model_params['out_channels'],
@@ -96,40 +91,6 @@ class ModelManager(torch.nn.Module):
 
         if self._w_latent_cons_loss > 0:
             assert self._swap_features
-
-        if self._w_rae_loss > 0:
-            assert self._w_kl_loss == 0
-            assert self._w_dip_loss == 0 and self._w_factor_loss == 0
-            self._gaussian_mixture = None
-            enc_w_decay = self._optimization_params['weight_decay']
-
-            if float(self._optimization_params['rae_grad_penalty']) > 0:
-                gen_w_decay = enc_w_decay
-            else:
-                gen_w_decay = self._optimization_params['rae_gen_weight_decay']
-
-            self._optimizer = torch.optim.Adam(
-                self._net.en_layers.parameters(),
-                lr=float(self._optimization_params['lr']),
-                weight_decay=float(enc_w_decay))
-            self._rae_gen_optimizer = torch.optim.Adam(
-                self._net.de_layers.parameters(),
-                lr=float(self._optimization_params['lr']),
-                weight_decay=float(gen_w_decay))
-
-        if self._w_dip_loss > 0:
-            assert not self._swap_features
-            assert self._w_kl_loss > 0
-
-        if self._w_factor_loss > 0:
-            assert not self._swap_features
-            assert self._w_kl_loss > 0
-            self._factor_discriminator = FactorVAEDiscriminator(
-                self._model_params['latent_size']).to(device)
-            self._disc_optimizer = torch.optim.Adam(
-                self._factor_discriminator.parameters(),
-                lr=float(self._optimization_params['lr']), betas=(0.5, 0.9),
-                weight_decay=self._optimization_params['weight_decay'])
 
         if 'classifier' in configurations:
             self._classifier_params = configurations['classifier']
@@ -172,7 +133,7 @@ class ModelManager(torch.nn.Module):
 
     @property
     def loss_keys(self):
-        return ['reconstruction', 'kl', 'rae', 'dip', 'factor',
+        return ['reconstruction', 'kl',
                 'latent_consistency', 'laplacian',
                 'classification', 'classification_acc', 'tot']
 
@@ -183,10 +144,6 @@ class ModelManager(torch.nn.Module):
     @property
     def is_vae(self):
         return self._w_kl_loss > 0
-
-    @property
-    def is_rae(self):
-        return self._w_rae_loss > 0
 
     @property
     def model_latent_size(self):
@@ -287,30 +244,20 @@ class ModelManager(torch.nn.Module):
         else:
             self._net.eval()
 
-        if self._w_factor_loss > 0:
-            iteration_function = self._do_factor_vae_iteration
-        else:
-            iteration_function = self._do_iteration
-
         self._reset_losses()
         it = 0
         for it, data in enumerate(data_loader):
             if train:
-                losses = iteration_function(data, device, train=True)
+                losses = self._do_iteration(data, device, train=True)
             else:
-                if self._w_rae_loss > 0:  # need gradients for gradient penalty
-                    losses = iteration_function(data, device, train=False)
-                else:
-                    with torch.no_grad():
-                        losses = iteration_function(data, device, train=False)
+                with torch.no_grad():
+                    losses = self._do_iteration(data, device, train=False)
             self._add_losses(losses)
         self._divide_losses(it + 1)
 
     def _do_iteration(self, data, device='cpu', train=True):
         if train:
             self._optimizer.zero_grad()
-            if self._w_rae_loss > 0:
-                self._rae_gen_optimizer.zero_grad()
             if self._classifier_params and self._mlp_classifier_end2end:
                 self._classifier_optimizer.zero_grad()
 
@@ -323,16 +270,6 @@ class ModelManager(torch.nn.Module):
             loss_kl = self._compute_kl_divergence_loss(mu, logvar)
         else:
             loss_kl = torch.tensor(0, device=device)
-
-        if self._w_rae_loss > 0:
-            loss_rae = self._compute_rae_loss(z, reconstructed)
-        else:
-            loss_rae = torch.tensor(0, device=device)
-
-        if self._w_dip_loss > 0:
-            loss_dip = self._compute_dip_loss(mu, logvar)
-        else:
-            loss_dip = torch.tensor(0, device=device)
 
         if self._swap_features:
             loss_z_cons = self._compute_latent_consistency(z, data.swapped)
@@ -354,8 +291,6 @@ class ModelManager(torch.nn.Module):
 
         loss_tot = loss_recon + \
             self._w_kl_loss * loss_kl + \
-            self._w_rae_loss * loss_rae + \
-            self._w_dip_loss * loss_dip + \
             self._w_latent_cons_loss * loss_z_cons + \
             self._w_laplacian_loss * loss_laplacian + \
             self._w_classifier_loss * loss_class
@@ -363,70 +298,15 @@ class ModelManager(torch.nn.Module):
         if train:
             loss_tot.backward()
             self._optimizer.step()
-            if self._w_rae_loss > 0:
-                self._rae_gen_optimizer.step()
             if self._classifier_params and self._mlp_classifier_end2end:
                 self._classifier_optimizer.step()
 
         return {'reconstruction': loss_recon.item(),
                 'kl': loss_kl.item(),
-                'rae': loss_rae.item(),
-                'dip': loss_dip.item(),
-                'factor': 0,
                 'latent_consistency': loss_z_cons.item(),
                 'laplacian': loss_laplacian.item(),
                 'classification': loss_class.item(),
                 'classification_acc': acc_class.item(),
-                'tot': loss_tot.item()}
-
-    def _do_factor_vae_iteration(self, data, device='cpu', train=True):
-        # Factor-vae split data into two batches.
-        data = data.to(device)
-        batch_size = data.x.size(dim=0)
-        half_batch_size = batch_size // 2
-        data = data.x.split(half_batch_size)
-        data1 = data[0]
-        data2 = data[1]
-
-        # Factor VAE Loss
-        reconstructed1, z1, mu1, logvar1 = self._net(data1)
-        loss_recon = self.compute_mse_loss(reconstructed1, data1)
-        loss_laplacian = self._compute_laplacian_regularizer(reconstructed1)
-
-        loss_kl = self._compute_kl_divergence_loss(mu1, logvar1)
-
-        disc_z = self._factor_discriminator(z1)
-        factor_loss = (disc_z[:, 0] - disc_z[:, 1]).mean()
-
-        loss_tot = loss_recon + \
-            self._w_kl_loss * loss_kl + \
-            self._w_laplacian_loss * loss_laplacian + \
-            self._w_factor_loss * factor_loss
-
-        if train:
-            self._optimizer.zero_grad()
-            loss_tot.backward(retain_graph=True)
-
-            _, z2, _, _ = self._net(data2)
-            z2_perm = self._permute_latent_dims(z2).detach()
-            disc_z_perm = self._factor_discriminator(z2_perm)
-            ones = torch.ones(half_batch_size, dtype=torch.long,
-                              device=self.device)
-            zeros = torch.zeros_like(ones)
-            disc_factor_loss = 0.5 * (cross_entropy(disc_z, zeros) +
-                                      cross_entropy(disc_z_perm, ones))
-
-            self._disc_optimizer.zero_grad()
-            disc_factor_loss.backward()
-            self._optimizer.step()
-            self._disc_optimizer.step()
-
-        return {'reconstruction': loss_recon.item(),
-                'kl': loss_kl.item(),
-                'dip': 0,
-                'factor': factor_loss.item(),
-                'latent_consistency': 0,
-                'laplacian': loss_laplacian.item(),
                 'tot': loss_tot.item()}
 
     @staticmethod
@@ -460,42 +340,6 @@ class ModelManager(torch.nn.Module):
     @staticmethod
     def _compute_embedding_loss(z):
         return (z ** 2).mean(dim=1)
-
-    @staticmethod
-    def _compute_gradient_penalty_loss(z, prediction):
-        grads = torch.autograd.grad(prediction ** 2, z,
-                                    grad_outputs=torch.ones_like(prediction),
-                                    create_graph=True, retain_graph=True)[0]
-        return torch.mean(grads ** 2, dim=1)
-
-    def _compute_rae_loss(self, z, prediction):
-        rae_embedding = float(self._optimization_params['rae_embedding'])  # 0.5
-        rae_grad_penalty = float(self._optimization_params['rae_grad_penalty'])
-
-        rae_loss = rae_embedding * self._compute_embedding_loss(z)
-
-        if rae_grad_penalty > 0:
-            rae_loss += rae_grad_penalty * \
-                    self._compute_gradient_penalty_loss(z, prediction)
-        return rae_loss.mean()
-
-    def _compute_dip_loss(self, mu, logvar):
-        centered_mu = mu - mu.mean(dim=1, keepdim=True)
-        cov_mu = centered_mu.t().matmul(centered_mu).squeeze()
-
-        if self._optimization_params['dip_type'] == 'ii':
-            cov_z = cov_mu + torch.mean(
-                torch.diagonal((2. * logvar).exp(), dim1=0), dim=0)
-        else:
-            cov_z = cov_mu
-
-        cov_diag = torch.diag(cov_z)
-        cov_offdiag = cov_z - torch.diag(cov_diag)
-
-        lambda_diag = self._optimization_params['dip_diag_lambda']
-        lambda_offdiag = self._optimization_params['dip_offdiag_lambda']
-        return lambda_offdiag * torch.sum(cov_offdiag ** 2) + \
-            lambda_diag * torch.sum((cov_diag - 1) ** 2)
 
     def _compute_latent_consistency(self, z, swapped_feature):
         bs = self._optimization_params['batch_size']
@@ -532,14 +376,6 @@ class ModelManager(torch.nn.Module):
                (torch.sum(torch.max(zero, lr - dr + eta2)) +
                 torch.sum(torch.max(zero, lg - dg + eta1)))
 
-    @staticmethod
-    def _permute_latent_dims(latent_sample):
-        perm = torch.zeros_like(latent_sample)
-        batch_size, dim_z = perm.size()
-        for z in range(dim_z):
-            pi = torch.randperm(batch_size).to(latent_sample.device)
-            perm[:, z] = latent_sample[pi, z]
-        return perm
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self.compute_mse_loss(
@@ -573,39 +409,6 @@ class ModelManager(torch.nn.Module):
             self._train_latents_list = latents_list
             self._train_dict_labels_lists = dict_labels_lists
         return latents_list, dict_labels_lists
-
-    @torch.no_grad()
-    def fit_gaussian_mixture(self, train_loader):
-        if self._train_latents_list is None:
-            self.encode_all(train_loader, is_train_loader=True)
-        latents = torch.cat(self._train_latents_list, dim=0)
-
-        if self._optimization_params['rae_gmm_mean_initialization']:
-            y_gt = np.concatenate(self._train_dict_labels_lists['y'])
-            means = []
-            for c in set(y_gt):
-                latents_c = latents[np.argwhere(y_gt == c)[:, 0], :]
-                means.append(torch.mean(latents_c, dim=0))
-            means_array = torch.stack(means).detach().numpy()
-            n_gaussians = means_array.shape[0]
-        else:
-            n_gaussians = self._optimization_params['rae_n_gaussians']
-            means_array = None
-
-        gmm = mixture.GaussianMixture(
-            n_components=n_gaussians, means_init=means_array,
-            covariance_type="full", max_iter=2000, verbose=0, tol=1e-3)
-        gmm.fit(latents.cpu().detach())
-        self._gaussian_mixture = gmm
-
-    def sample_gaussian_mixture(self, n_samples):
-        if not self._gaussian_mixture.is_fitted:
-            raise ArithmeticError("GMM not fitted yet")
-        z = self._gaussian_mixture.sample(n_samples)[0]
-        return torch.tensor(z, device=self.device, dtype=torch.float)
-
-    def score_samples_gaussian_mixture(self, samples):
-        return self._gaussian_mixture.score_samples(samples)
 
     def mlp_classifier_epoch(self, latents_list, labels_list, train=True):
         epoch_loss = 0
@@ -842,11 +645,6 @@ class ModelManager(torch.nn.Module):
         opt_name = os.path.join(checkpoint_dir, 'optimizer.pt')
         torch.save({'model': self._net.state_dict()}, net_name)
         torch.save({'optimizer': self._optimizer.state_dict()}, opt_name)
-        if self.is_rae:
-            gmm_name = os.path.join(
-                checkpoint_dir, 'gmm_%08d.pkl' % (epoch + 1))
-            with open(gmm_name, 'wb') as f:
-                pickle.dump(self._gaussian_mixture, f)
         if self._classifier_params and self._mlp_classifier_end2end:
             self.save_classifier(checkpoint_dir, 'mlp')
 
@@ -857,14 +655,6 @@ class ModelManager(torch.nn.Module):
         epochs = int(last_model_name[-11:-3])
         state_dict = torch.load(os.path.join(checkpoint_dir, 'optimizer.pt'))
         self._optimizer.load_state_dict(state_dict['optimizer'])
-        if self.is_rae:
-            gmm_name = last_model_name.replace('model', 'gmm')
-            gmm_name = gmm_name.replace('.pt', '.pkl')
-            try:
-                with open(gmm_name, 'rb') as f:
-                    self._gaussian_mixture = pickle.load(f)
-            except FileNotFoundError:
-                print("GMM of RAE not fitted yet. The GMM was not loaded.")
         if self._classifier_params is not None:
             self.resume_classifier(checkpoint_dir, 'mlp')
             self.resume_classifier(checkpoint_dir, 'svm')

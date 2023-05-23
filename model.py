@@ -188,56 +188,6 @@ class Model(nn.Module):
         return mu + eps * std
 
 
-class FactorVAEDiscriminator(nn.Module):
-    def __init__(self, latent_dim=10):
-        """
-        Model Architecture
-        ------------
-        - 6 layer multi-layer perceptron, each with 1000 hidden units
-        - Leaky ReLu activations
-        - Output 2 logits
-        """
-        super(FactorVAEDiscriminator, self).__init__()
-
-        # Activation parameters
-        self.neg_slope = 0.2
-        self.leaky_relu = nn.LeakyReLU(self.neg_slope, True)
-
-        # Layer parameters
-        self.z_dim = latent_dim
-        self.hidden_units = 1000
-        # theoretically 1 with sigmoid but bad results => use 2 and softmax
-        out_units = 2
-
-        # Fully connected layers
-        self.lin1 = nn.Linear(self.z_dim, self.hidden_units)
-        self.lin2 = nn.Linear(self.hidden_units, self.hidden_units)
-        self.lin3 = nn.Linear(self.hidden_units, self.hidden_units)
-        self.lin4 = nn.Linear(self.hidden_units, self.hidden_units)
-        self.lin5 = nn.Linear(self.hidden_units, self.hidden_units)
-        self.lin6 = nn.Linear(self.hidden_units, out_units)
-
-        self.reset_parameters()
-
-    def forward(self, z):
-        z = self.leaky_relu(self.lin1(z))
-        z = self.leaky_relu(self.lin2(z))
-        z = self.leaky_relu(self.lin3(z))
-        z = self.leaky_relu(self.lin4(z))
-        z = self.leaky_relu(self.lin5(z))
-        z = self.lin6(z)
-        return z
-
-    def reset_parameters(self):
-        self.apply(self.weights_init)
-
-    @staticmethod
-    def weights_init(layer):
-        if isinstance(layer, nn.Linear):
-            x = layer.weight
-            return nn.init.kaiming_uniform_(x, a=0.2, nonlinearity='leaky_relu')
-
-
 class MLPClassifier(nn.Module):
     def __init__(self, in_features, hidden_features, out_classes):
         super(MLPClassifier, self).__init__()

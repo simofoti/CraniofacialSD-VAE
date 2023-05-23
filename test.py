@@ -30,7 +30,6 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.colors import Normalize
 from matplotlib.cm import get_cmap
 
-from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
 from utils import create_alpha_cmap, plot_confusion_matrix, \
     procedures2attributes_dict, colour2attribute_dict, plot_2d_arrow
 
@@ -48,14 +47,10 @@ class Tester:
         self._train_loader = train_load
         self._test_loader = test_load
         self._is_vae = self._manager.is_vae
-        self._is_rae = self._manager.is_rae
         self.latent_stats = self.compute_latent_stats(train_load)
         self._region_ldas = {key: LinearDiscriminantAnalysis(
             n_components=2, store_covariance=True) for key in
             self._manager.latent_regions.keys()}
-
-        self._dist_all_attrs_embedding_fig = None
-        self._dist_region_embeddings_fig = None
 
         self.template_landmarks_idx = [14336, 14250, 13087, 13145, 4134,
                                        871, 4166, 303, 15614, 7166,
@@ -68,27 +63,19 @@ class Tester:
 
         # Qualitative evaluations
         sns.set_theme(style="ticks")
-        self.per_variable_range_experiments(use_z_stats=False)
+        self.latent_traversals(use_z_stats=False)
         self.plot_embeddings()
-        if self._config['data']['swap_features']:
-            self.latent_swapping(next(iter(self._test_loader)).x)
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
-        # self.interpolate()
-        # if self._config['data']['dataset_type'] == 'faces':
-        #     self.direct_manipulation()
 
         # Quantitative evaluation
         self.test_classifiers()
-        self.evaluate_gen(self._test_loader, n_sampled_points=2048)
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
         diversity = self.compute_diversity()
-        specificity = self.compute_specificity()
         metrics = {'recon_errors': recon_errors,
                    'train_set_diversity': train_set_diversity,
-                   'diversity': diversity,
-                   'specificity': specificity}
+                   'diversity': diversity}
 
         outfile_path = os.path.join(self._out_dir, 'eval_metrics.json')
         with open(outfile_path, 'w') as outfile:
@@ -141,8 +128,8 @@ class Tester:
             colors = [0., 0., 0.]
         return tuple(colors)
 
-    def per_variable_range_experiments(self, z_range_multiplier=1,
-                                       use_z_stats=True, save_suffix=None):
+    def latent_traversals(self, z_range_multiplier=1,
+                          use_z_stats=True, save_suffix=None):
         if self._is_vae and not use_z_stats:
             latent_size = self._manager.model_latent_size
             z_means = torch.zeros(latent_size)
@@ -247,8 +234,6 @@ class Tester:
     def random_latent(self, n_samples, z_range_multiplier=1):
         if self._is_vae:  # sample from normal distribution if vae
             z = torch.randn([n_samples, self._manager.model_latent_size])
-        elif self._is_rae:
-            z = self._manager.sample_gaussian_mixture(n_samples)
         else:
             z_means = self.latent_stats['means']
             z_mins = self.latent_stats['mins'] * z_range_multiplier
@@ -350,116 +335,6 @@ class Tester:
                 self.random_generation(samples_per_batch))
             mean_distances.append(torch.mean(verts_batch_distances, dim=1))
         return torch.mean(torch.cat(mean_distances, dim=0)).item()
-
-    def compute_specificity(self, n_samples=100):
-        print('Computing generative model specificity')
-        min_distances = []
-        for _ in tqdm.tqdm(range(n_samples)):
-            sample = self.random_generation(1)
-
-            mean_distances = []
-            for data in self._train_loader:
-                if self._config['data']['swap_features']:
-                    x = data.x[self._manager.batch_diagonal_idx, ::]
-                else:
-                    x = data.x
-
-                if self._normalized_data:
-                    x = self._unnormalize_verts(x.to(self._device))
-                else:
-                    x = x.to(self._device)
-
-                v_dist = self._manager.compute_vertex_errors(
-                    x, sample.expand(x.shape[0], -1, -1))
-                mean_distances.append(torch.mean(v_dist, dim=1))
-            min_distances.append(torch.min(torch.cat(mean_distances, dim=0)))
-        return torch.mean(torch.stack(min_distances)).item()
-
-    def evaluate_gen(self, data_loader, n_sampled_points=None):
-        all_sample = []
-        all_ref = []
-        for data in tqdm.tqdm(data_loader):
-            if self._config['data']['swap_features']:
-                data.x = data.x[self._manager.batch_diagonal_idx, ::]
-            data = data.to(self._device)
-            if self._normalized_data:
-                data.x = self._unnormalize_verts(data.x)
-
-            ref = data.x
-            sample = self.random_generation(data.x.shape[0])
-
-            if n_sampled_points is not None:
-                subset_idxs = np.random.choice(ref.shape[1], n_sampled_points)
-                ref = ref[:, subset_idxs]
-                sample = sample[:, subset_idxs]
-
-            all_ref.append(ref)
-            all_sample.append(sample)
-
-        sample_pcs = torch.cat(all_sample, dim=0)
-        ref_pcs = torch.cat(all_ref, dim=0)
-        print("Generation sample size:%s reference size: %s"
-              % (sample_pcs.size(), ref_pcs.size()))
-
-        # Compute metrics
-        metrics = compute_all_metrics(
-            sample_pcs, ref_pcs, self._config['optimization']['batch_size'])
-        metrics = {k: (v.cpu().detach().item()
-                       if not isinstance(v, float) else v) for k, v in
-                   metrics.items()}
-        print(metrics)
-
-        sample_pcl_npy = sample_pcs.cpu().detach().numpy()
-        ref_pcl_npy = ref_pcs.cpu().detach().numpy()
-        jsd = jsd_between_point_cloud_sets(sample_pcl_npy, ref_pcl_npy)
-        print("JSD:%s" % jsd)
-        metrics["jsd"] = jsd
-
-        outfile_path = os.path.join(self._out_dir, 'eval_metrics_gen.json')
-        with open(outfile_path, 'w') as outfile:
-            json.dump(metrics, outfile)
-
-    def latent_swapping(self, v_batch=None):
-        if v_batch is None:
-            v_batch = self.random_generation(2, denormalize=False)
-        else:
-            assert v_batch.shape[0] >= 2
-            v_batch = v_batch.to(self._device)
-            if self._config['data']['swap_features']:
-                v_batch = v_batch[self._manager.batch_diagonal_idx, ::]
-            v_batch = v_batch[:2, ::]
-
-        z = self._manager.encode(v_batch)
-        z_0, z_1 = z[0, ::], z[1, ::]
-
-        swapped_verts = []
-        for key, z_region in self._manager.latent_regions.items():
-            z_swap = z_0.clone()
-            z_swap[z_region[0]:z_region[1]] = z_1[z_region[0]:z_region[1]]
-            swapped_verts.append(self._manager.generate(z_swap))
-
-        all_verts = torch.cat([v_batch, torch.cat(swapped_verts, dim=0)], dim=0)
-
-        if self._normalized_data:
-            all_verts = self._unnormalize_verts(all_verts)
-
-        out_mesh_dir = os.path.join(self._out_dir, 'latent_swapping')
-        if not os.path.isdir(out_mesh_dir):
-            os.mkdir(out_mesh_dir)
-        self.save_batch(all_verts, out_mesh_dir)
-
-        source_dist = self._manager.compute_vertex_errors(
-            all_verts, all_verts[0, ::].expand(all_verts.shape[0], -1, -1))
-        target_dist = self._manager.compute_vertex_errors(
-            all_verts, all_verts[1, ::].expand(all_verts.shape[0], -1, -1))
-
-        renderings = self._manager.render(all_verts)
-        renderings_source = self._manager.render(all_verts, source_dist, 5)
-        renderings_target = self._manager.render(all_verts, target_dist, 5)
-        grid = make_grid(torch.cat(
-            [renderings, renderings_source, renderings_target], dim=-2),
-            padding=10, pad_value=1, nrow=renderings.shape[0])
-        save_image(grid, os.path.join(out_mesh_dir, 'latent_swapping.png'))
 
     def fit_mesh(self, new_m_path, new_m_landmarks_path,
                  lr=5e-3, iterations=250):
@@ -674,69 +549,6 @@ class Tester:
         x_nn = knn_points(x, y, lengths1=x_lengths, lengths2=y_lengths, K=1)
         cham_x = x_nn.dists[..., 0]
         return cham_x
-
-    def direct_manipulation(self, z=None, indices=None, new_coords=None,
-                            lr=0.1, iterations=50, affect_only_zf=True):
-        if z is None:
-            z = self.latent_stats['means'].unsqueeze(0)
-            # z = self.random_latent(1)
-            z = z.clone().detach().requires_grad_(True)
-        if indices is None and new_coords is None:
-            indices = [8816, 8069, 8808]
-            new_coords = torch.tensor([[-0.0108174, 0.0814601, 0.664498],
-                                       [-0.1821480, 0.0190682, 0.419531],
-                                       [-0.0096422, 0.3058790, 0.465528]])
-        new_coords = new_coords.unsqueeze(0).to(self._device)
-
-        colors = self._manager.template.colors.to(torch.long)
-        features = [str(colors[i].cpu().detach().numpy()) for i in indices]
-        assert all(x == features[0] for x in features)
-
-        zf_idxs = self._manager.latent_regions[features[0]]
-
-        optimizer = torch.optim.Adam([z], lr)
-        initial_verts = self._manager.generate_for_opt(z.to(self._device))
-        if self._normalized_data:
-            initial_verts = self._unnormalize_verts(initial_verts)
-        gen_verts = None
-        for i in range(iterations):
-            optimizer.zero_grad()
-            gen_verts = self._manager.generate_for_opt(z.to(self._device))
-            if self._normalized_data:
-                gen_verts = self._unnormalize_verts(gen_verts)
-
-            loss = self._manager.compute_mse_loss(
-                gen_verts[:, indices, :], new_coords)
-            loss.backward()
-
-            if affect_only_zf:
-                z.grad[:, :zf_idxs[0]] = 0
-                z.grad[:, zf_idxs[1]:] = 0
-            optimizer.step()
-
-        # Save output meshes
-        out_mesh_dir = os.path.join(self._out_dir, 'direct_manipulation')
-        if not os.path.isdir(out_mesh_dir):
-            os.mkdir(out_mesh_dir)
-
-        initial_mesh = trimesh.Trimesh(
-            initial_verts[0, ::].cpu().detach().numpy(),
-            self._manager.template.face.t().cpu().numpy())
-        initial_mesh.export(os.path.join(out_mesh_dir, 'initial.ply'))
-
-        new_mesh = trimesh.Trimesh(
-            gen_verts[0, ::].cpu().detach().numpy(),
-            self._manager.template.face.t().cpu().numpy())
-        new_mesh.export(os.path.join(out_mesh_dir, 'new.ply'))
-
-        for i, coords in zip(indices, new_coords[0, ::].detach().cpu().numpy()):
-            sphere = trimesh.creation.icosphere(radius=0.01)
-            sphere.vertices = sphere.vertices + coords
-            sphere.export(os.path.join(out_mesh_dir, f'target_{i}.ply'))
-
-            sphere = trimesh.creation.icosphere(radius=0.01)
-            sphere.vertices += initial_verts[0, i, :].cpu().detach().numpy()
-            sphere.export(os.path.join(out_mesh_dir, f'selected_{i}.ply'))
 
     def interpolate(self):
         with open(os.path.join('precomputed_craniofacial',
@@ -1513,17 +1325,13 @@ if __name__ == '__main__':
     # tester.interpolate_syndrome_to_normal(
     #     patient_fname='c_atypical_head_face.obj')
     # tester.classify_and_project(patient_fname='c_atypical_head_face.obj')
-    # tester.direct_manipulation()
     # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(256)
     # tester.set_rendering_background_color()
     # tester.interpolate()
-    # tester.latent_swapping(next(iter(test_loader)).x)
-    # tester.per_variable_range_experiments()
+    # tester.latent_traversals()
     # tester.random_generation_and_rendering(n_samples=16)
     # tester.random_generation_and_save(n_samples=16)
     # print(tester.reconstruction_errors(test_loader))
-    # print(tester.compute_specificity(train_loader, 100))
     # print(tester.compute_diversity_train_set())
     # print(tester.compute_diversity())
-    # tester.evaluate_gen(test_loader, n_sampled_points=2048)
