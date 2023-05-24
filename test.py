@@ -48,9 +48,8 @@ class Tester:
         self._test_loader = test_load
         self._is_vae = self._manager.is_vae
         self.latent_stats = self.compute_latent_stats(train_load)
-        self._region_ldas = {key: LinearDiscriminantAnalysis(
-            n_components=2, store_covariance=True) for key in
-            self._manager.latent_regions.keys()}
+        self._region_ldas = self._manager.region_ldas
+        self._region_qdas = self._manager.region_qdas
 
         self.template_landmarks_idx = [14336, 14250, 13087, 13145, 4134,
                                        871, 4166, 303, 15614, 7166,
@@ -510,11 +509,9 @@ class Tester:
 
         fig_regions_z_name = os.path.join(self._out_dir,
                                           'emb_all_train_dist.pkl')
-        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
         with open(fig_regions_z_name, 'rb') as f:
             fig_fgrid_regions_z = pickle.load(f)
-        with open(region_ldas_name, 'rb') as f:
-            self._region_ldas = pickle.load(f)
+
         z_p_np = z[min_error_idx, ::].unsqueeze(0).detach().cpu().numpy()
         r_proj = {}
         for key, z_region in self._manager.latent_regions.items():
@@ -759,22 +756,17 @@ class Tester:
                                          'lda_emb_distributions.pkl')
         fig_regions_z_name = os.path.join(self._out_dir,
                                           'emb_all_train_dist.pkl')
-        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
         try:
             with open(fig_entire_z_name, 'rb') as f:
                 fig_entire_z = pickle.load(f)
             with open(fig_regions_z_name, 'rb') as f:
                 fig_fgrid_regions_z = pickle.load(f)
-            with open(region_ldas_name, 'rb') as f:
-                self._region_ldas = pickle.load(f)
         except FileNotFoundError:
             self.plot_embeddings(embedding_mode='lda')
             with open(fig_entire_z_name, 'rb') as f:
                 fig_entire_z = pickle.load(f)
             with open(fig_regions_z_name, 'rb') as f:
                 fig_fgrid_regions_z = pickle.load(f)
-            with open(region_ldas_name, 'rb') as f:
-                self._region_ldas = pickle.load(f)
 
         # project entire latents in 2D and save figure
         z_interp_proj = self._manager.lda_project_latents_in_2d(
@@ -897,11 +889,8 @@ class Tester:
 
         fig_regions_z_name = os.path.join(self._out_dir,
                                           'emb_all_train_dist.pkl')
-        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
         with open(fig_regions_z_name, 'rb') as f:
             fig_fgrid_regions_z = pickle.load(f)
-        with open(region_ldas_name, 'rb') as f:
-            self._region_ldas = pickle.load(f)
         z_p_np = z_p.detach().cpu().numpy()
         r_proj = {}
         for key, z_region in self._manager.latent_regions.items():
@@ -940,11 +929,9 @@ class Tester:
 
         fig_regions_z_name = os.path.join(self._out_dir,
                                           'emb_all_train_dist.pkl')
-        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
         with open(fig_regions_z_name, 'rb') as f:
             fig_fgrid_regions_z = pickle.load(f)
-        with open(region_ldas_name, 'rb') as f:
-            self._region_ldas = pickle.load(f)
+
         z_pre_np = z_pre.detach().cpu().numpy()
         z_post_np = z_post.detach().cpu().numpy()
         for key, z_region in self._manager.latent_regions.items():
@@ -1095,14 +1082,8 @@ class Tester:
         for key, z_region in self._manager.latent_regions.items():
             if z_region[1] - z_region[0] > 2:
                 tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-
-                try:
-                    z_r_embeddings = self._region_ldas[key].transform(
-                        tr_z_np_region)
-                except NotFittedError:
-                    z_r_embeddings = self._region_ldas[key].fit_transform(
-                        tr_z_np_region, tr_y)
-
+                z_r_embeddings = self._region_ldas[key].transform(
+                    tr_z_np_region)
                 x1, x2 = z_r_embeddings[:, 0], z_r_embeddings[:, 1]
             else:
                 x1 = tr_z_np[:, z_region[0]]
@@ -1139,10 +1120,6 @@ class Tester:
         with open(fig_name + '.pkl', 'wb') as f:
             pickle.dump(g, f)
         plt.savefig(fig_name + '.svg')
-
-        region_ldas_name = os.path.join(self._out_dir, 'region_ldas.pkl')
-        with open(region_ldas_name, 'wb') as f:
-            pickle.dump(self._region_ldas, f)
 
     def test_classifiers(self):
         plt.clf()
@@ -1213,33 +1190,18 @@ class Tester:
         self.confusion_matrices_per_region(ts_z_np, ts_ly)
 
     def confusion_matrices_per_region(self, ts_z_np, ts_ly):
-        tr_z, tr_l = self._manager.train_latents_and_labels
-        if tr_z is None:
-            tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
-        tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
-        tr_z_np = torch.cat(tr_z, dim=0).numpy()
-
         confusion_matrices_lda = {}
         for key, z_region in self._manager.latent_regions.items():
-            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-            try:
-                pred_r_lda = self._region_ldas[key].predict(
-                    ts_z_np[:, z_region[0]:z_region[1]])
-            except NotFittedError:
-                self._region_ldas[key].fit(tr_z_np_region, tr_y)
-                pred_r_lda = self._region_ldas[key].predict(
-                    ts_z_np[:, z_region[0]:z_region[1]])
-
+            pred_r_lda = self._region_ldas[key].predict(
+                ts_z_np[:, z_region[0]:z_region[1]])
             confmat_r_lda = confusion_matrix(
                 ts_ly, self._manager.idx2class(pred_r_lda), normalize='true')
             confusion_matrices_lda[key] = confmat_r_lda
 
         confusion_matrices_qda = {}
         for key, z_region in self._manager.latent_regions.items():
-            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-            r_qda = QuadraticDiscriminantAnalysis(
-                store_covariance=True).fit(tr_z_np_region, tr_y)
-            pred_r_qda = r_qda.predict(ts_z_np[:, z_region[0]:z_region[1]])
+            pred_r_qda = self._region_qdas[key].predict(
+                ts_z_np[:, z_region[0]:z_region[1]])
             confmat_r_qda = confusion_matrix(
                 ts_ly, self._manager.idx2class(pred_r_qda), normalize='true')
             confusion_matrices_qda[key] = confmat_r_qda
@@ -1306,6 +1268,8 @@ if __name__ == '__main__':
                     output_directory, configurations)
 
     # tester()
+    # tester.set_renderings_size(256)
+    # tester.set_rendering_background_color()
     # tester.fit_mesh(
     #     new_m_path="/media/simo/DATASHURPRO/for_simone/atypical_cruzon/atypical_head_face.obj",
     #     new_m_landmarks_path="/media/simo/DATASHURPRO/for_simone/atypical_cruzon/atypical_head_face_lnd.txt",
@@ -1317,17 +1281,14 @@ if __name__ == '__main__':
     # tester.plot_embeddings(embedding_mode='lda')
     # tester.test_classifiers()
     tester.classify_and_project_pre_post_pair(
-        pre_path="/media/simo/DATASHURPRO/for_simone/head_face_meshes/a_6.obj",
-        post_path="/media/simo/DATASHURPRO/apert_fitted_meshes/929805_Post_Op.ply",
+        pre_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Missing_Apert_Mesh_out/A102_Pre_Op.ply",
+        post_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Apert/GOSH/642788_Post_Op.ply",
     )
     # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.interpolate_syndrome_to_normal(
     #     patient_fname='c_atypical_head_face.obj')
     # tester.classify_and_project(patient_fname='c_atypical_head_face.obj')
-    # tester.fit_coma_data_different_noises()
-    # tester.set_renderings_size(256)
-    # tester.set_rendering_background_color()
     # tester.interpolate()
     # tester.latent_traversals()
     # tester.random_generation_and_rendering(n_samples=16)

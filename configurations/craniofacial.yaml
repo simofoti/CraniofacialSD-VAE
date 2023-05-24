@@ -1,7 +1,7 @@
 data:
   template_path: /home/simo/Develop/id-generator/precomputed_craniofacial/template_sym2_fixed.ply    # vertices should be coloured (vertex semantic segmentation)
   dataset_summary_path: /media/simo/DATASHURPRO/for_simone/full_dataset_summary.xlsx
-  precomputed_path: precomputed_craniofacial
+  precomputed_path: precomputed_craniofacial_new
   data_type: heads                                                              # {heads, faces}
   stratified_split: True
   dataset_path: /media/simo/DATASHURPRO/for_simone/head_face_meshes

@@ -77,4 +77,4 @@ manager.train_and_validate_classifiers(train_loader, validation_loader,
                                        writer, checkpoint_dir)
 
 tester.compute_latent_stats(train_loader)
-tester()
+# tester()

@@ -109,6 +109,7 @@ class ModelManager(torch.nn.Module):
             self._class_weights = None
 
             self._main_classifier = None
+
             self.classifier_mlp = MLPClassifier(
                 self._model_params['latent_size'],
                 self._classifier_params['mlp_hidden_features'],
@@ -123,6 +124,20 @@ class ModelManager(torch.nn.Module):
                 n_components=2, store_covariance=True)
             self.qda = discriminant_analysis.QuadraticDiscriminantAnalysis(
                 store_covariance=True)
+
+            if self._w_latent_cons_loss > 0:
+                self.region_ldas = {
+                    key: discriminant_analysis.LinearDiscriminantAnalysis(
+                        n_components=2, store_covariance=True)
+                    for key in self.latent_regions.keys()
+                }
+                self.region_qdas = {
+                    key: discriminant_analysis.QuadraticDiscriminantAnalysis(
+                        store_covariance=True)
+                    for key in self.latent_regions.keys()
+                }
+            else:
+                self.region_ldas, self.region_qdas = None, None
         else:
             self._classifier_params = None
 
@@ -376,7 +391,6 @@ class ModelManager(torch.nn.Module):
                (torch.sum(torch.max(zero, lr - dr + eta2)) +
                 torch.sum(torch.max(zero, lg - dg + eta1)))
 
-
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self.compute_mse_loss(
             out_verts, gt_verts, reduction='none')
@@ -453,7 +467,7 @@ class ModelManager(torch.nn.Module):
             accuracy_mlp = self.mlp_classifier_epoch(val_latents_list,
                                                      val_l_list, False)[1]
             print(f"MLP validation accuracy = {accuracy_mlp}")
-            self.save_classifier(checkpoint_dir, 'mlp')
+            self._save_classifier(checkpoint_dir, 'mlp')
 
         latents = torch.cat(self._train_latents_list, dim=0).numpy()
         y_gt = self.class2idx(
@@ -465,19 +479,28 @@ class ModelManager(torch.nn.Module):
         self.classifier_svm.fit(latents, y_gt)
         accuracy_svm = self.classifier_svm.score(latents_val, y_gt_val)
         print(f"SVM validation accuracy = {accuracy_svm}")
-        self.save_classifier(checkpoint_dir, 'svm')
+        self._save_classifier(checkpoint_dir, 'svm')
 
         # LDA
         self.lda.fit(latents, y_gt)
         accuracy_lda = self.lda.score(latents_val, y_gt_val)
         print(f"LDA validation accuracy = {accuracy_lda}")
-        self.save_classifier(checkpoint_dir, 'lda')
+        self._save_classifier(checkpoint_dir, 'lda')
 
         # QDA
         self.qda.fit(latents, y_gt)
         accuracy_qda = self.qda.score(latents_val, y_gt_val)
         print(f"QDA validation accuracy = {accuracy_qda}")
-        self.save_classifier(checkpoint_dir, 'qda')
+        self._save_classifier(checkpoint_dir, 'qda')
+
+        # region LDAs and QDAs
+        if self._w_latent_cons_loss > 0:
+            for key, z_region in self.latent_regions.items():
+                z_np_region = latents[:, z_region[0]:z_region[1]]
+                self.region_ldas[key].fit(z_np_region, y_gt)
+                self.region_qdas[key].fit(z_np_region, y_gt)
+            self._save_region_classifiers(checkpoint_dir, 'lda')
+            self._save_region_classifiers(checkpoint_dir, 'qda')
 
     def lda_project_latents_in_2d(self, latents):
         return self.lda.transform(latents)
@@ -646,7 +669,7 @@ class ModelManager(torch.nn.Module):
         torch.save({'model': self._net.state_dict()}, net_name)
         torch.save({'optimizer': self._optimizer.state_dict()}, opt_name)
         if self._classifier_params and self._mlp_classifier_end2end:
-            self.save_classifier(checkpoint_dir, 'mlp')
+            self._save_classifier(checkpoint_dir, 'mlp')
 
     def resume(self, checkpoint_dir):
         last_model_name = utils.get_model_list(checkpoint_dir, 'model')
@@ -656,14 +679,17 @@ class ModelManager(torch.nn.Module):
         state_dict = torch.load(os.path.join(checkpoint_dir, 'optimizer.pt'))
         self._optimizer.load_state_dict(state_dict['optimizer'])
         if self._classifier_params is not None:
-            self.resume_classifier(checkpoint_dir, 'mlp')
-            self.resume_classifier(checkpoint_dir, 'svm')
-            self.resume_classifier(checkpoint_dir, 'lda')
-            self.resume_classifier(checkpoint_dir, 'qda')
+            self._resume_classifier(checkpoint_dir, 'mlp')
+            self._resume_classifier(checkpoint_dir, 'svm')
+            self._resume_classifier(checkpoint_dir, 'lda')
+            self._resume_classifier(checkpoint_dir, 'qda')
+            if self._w_latent_cons_loss > 0:
+                self._resume_region_classifiers(checkpoint_dir, 'lda')
+                self._resume_region_classifiers(checkpoint_dir, 'qda')
         print(f"Resume from epoch {epochs}")
         return epochs
 
-    def save_classifier(self, checkpoint_dir, classifier_type='mlp'):
+    def _save_classifier(self, checkpoint_dir, classifier_type='mlp'):
         if classifier_type == 'mlp':
             net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
             torch.save({'model': self.classifier_mlp.state_dict()}, net_name)
@@ -682,7 +708,7 @@ class ModelManager(torch.nn.Module):
         else:
             raise NotImplementedError
 
-    def resume_classifier(self, checkpoint_dir, classifier_type='mlp'):
+    def _resume_classifier(self, checkpoint_dir, classifier_type='mlp'):
         try:
             if classifier_type == 'mlp':
                 net_name = os.path.join(checkpoint_dir, 'mlp_classifier.pt')
@@ -704,6 +730,34 @@ class ModelManager(torch.nn.Module):
                 raise NotImplementedError
         except FileNotFoundError:
             print(f"Can't load classifier {classifier_type}: not trained yet.")
+
+    def _save_region_classifiers(self, checkpoint_dir, classifier_type='lda'):
+        if classifier_type == 'lda':
+            r_ldas_name = os.path.join(checkpoint_dir, 'region_ldas.pkl')
+            with open(r_ldas_name, 'wb') as f:
+                pickle.dump(self.region_ldas, f)
+        elif classifier_type == 'qda':
+            r_qdas_name = os.path.join(checkpoint_dir, 'region_qdas.pkl')
+            with open(r_qdas_name, 'wb') as f:
+                pickle.dump(self.region_qdas, f)
+        else:
+            raise NotImplementedError
+
+    def _resume_region_classifiers(self, checkpoint_dir, classifier_type='lda'):
+        try:
+            if classifier_type == 'lda':
+                r_ldas_name = os.path.join(checkpoint_dir, 'region_ldas.pkl')
+                with open(r_ldas_name, 'rb') as f:
+                    self.region_ldas = pickle.load(f)
+            elif classifier_type == 'qda':
+                r_qdas_name = os.path.join(checkpoint_dir, 'region_qdas.pkl')
+                with open(r_qdas_name, 'rb') as f:
+                    self.region_qdas = pickle.load(f)
+            else:
+                raise NotImplementedError
+        except FileNotFoundError:
+            print(f"Can't load region classifiers {classifier_type}: "
+                  f"not trained yet.")
 
 
 class ShadelessShader(torch.nn.Module):
