@@ -19,11 +19,8 @@ from pytorch3d.loss.point_mesh_distance import point_face_distance
 from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
 from sklearn.manifold import TSNE
-from sklearn.discriminant_analysis import \
-    LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.utils.multiclass import unique_labels
-from sklearn.exceptions import NotFittedError
 from scipy.stats import multivariate_normal
 from scipy.linalg import eigh, orthogonal_procrustes
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
@@ -456,12 +453,8 @@ class Tester:
         tr_z, tr_l = self._manager.encode_all(self._train_loader, True)
         tr_z_np = torch.cat(tr_z, dim=0).numpy()
         for key, z_region in self._manager.latent_regions.items():
-            tr_z_np_region = tr_z_np[:, z_region[0]:z_region[1]]
-            tr_y = np.array(self._manager.class2idx(np.concatenate(tr_l['y'])))
-            r_qda = QuadraticDiscriminantAnalysis(
-                store_covariance=True).fit(tr_z_np_region, tr_y)
             z_loc = z[min_error_idx, z_region[0]:z_region[1]]
-            pred_r_qda = r_qda.predict(
+            pred_r_qda = self._region_qdas[key].predict(
                 z_loc.unsqueeze(0).cpu().detach().numpy())
             print(f"{colour2attribute_dict[key]} -> "
                   f"{self._manager.idx2class(pred_r_qda)}")
