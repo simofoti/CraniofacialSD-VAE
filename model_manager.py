@@ -6,6 +6,7 @@ import tqdm
 
 import numpy as np
 
+from scipy.spatial.distance import mahalanobis
 from sklearn import svm, discriminant_analysis
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
@@ -511,6 +512,21 @@ class ModelManager(torch.nn.Module):
         mean = self.qda.means_[sample_class]
         cov = self.qda.covariance_[sample_class]
         return np.random.multivariate_normal(mean, cov, n_samples)
+
+    def mahalanobis_dist_to_qda_distribution(self, z, distribution_class='n',
+                                             region='all'):
+        z = z.cpu().detach().numpy() if torch.is_tensor(z) else z
+        index = self.class2idx(distribution_class)
+
+        if region == 'all':
+            mean = self.qda.means_[index]
+            covariance = self.qda.covariance_[index]
+        else:
+            mean = self.region_qdas[region].means_[index]
+            covariance = self.region_qdas[region].covariance_[index]
+
+        inv_covariance = np.linalg.inv(covariance)
+        return mahalanobis(z, mean, inv_covariance)
 
     @torch.no_grad()
     def classify_latent(self, z, model='main'):

@@ -896,21 +896,87 @@ class Tester:
         fig_fgrid_regions_z.fig.savefig(
             os.path.join(out_interp_dir, patient_fname[:-4] + '_emb_r.svg'))
 
-    def classify_and_project_pre_post_pair(self, pre_path, post_path):
+    def evaluate_all_pre_post_pairs_in_excel(self, pairs_root,
+                                             pairs_excel_path):
+        pairs_df = pd.read_excel(pairs_excel_path)
+        for r_idx, row in pairs_df.iterrows():
+            pid, procedure = str(row["PID"]), row["Surgery regions"]
+            pre_path = os.path.join(pairs_root, row["Pre name"])
+            post_path = os.path.join(pairs_root, row["Post name"])
+            metrics = self.evaluate_pre_post_pair(pre_path, post_path,
+                                                  pid, procedure)
+            for k, metric in metrics.items():
+                pairs_df.loc[r_idx, k] = metric
+        pairs_df.to_excel(pairs_excel_path[:-5] + "_with_results.xlsx")
+
+    def evaluate_pre_post_pair(self, pre_path, post_path,
+                               patient_id, procedure='monobloc'):
         z_pre = self._load_and_encode(mesh_path=pre_path)
         z_post = self._load_and_encode(mesh_path=post_path)
-        print(f"pre class: {self._manager.classify_latent(z_pre, 'qda')}")
-        print(f"post class: {self._manager.classify_latent(z_post, 'qda')}")
+
+        self._project_pre_post_pair(z_pre, z_post, patient_id)
+
+        pre_class = self._manager.classify_latent(z_pre, 'qda')
+        post_class = self._manager.classify_latent(z_post, 'qda')
+
+        pre_posteriors = self._manager.qda.predict_proba(
+            z_pre.detach().cpu().numpy())
+        post_posteriors = self._manager.qda.predict_proba(
+            z_post.detach().cpu().numpy())
+        print(f"pre_posteriors: {pre_posteriors}, "
+              f"post_posteriors: {post_posteriors}")
+
+        d_pre_g = self._manager.mahalanobis_dist_to_qda_distribution(z_pre)
+        d_post_g = self._manager.mahalanobis_dist_to_qda_distribution(z_post)
+        metric_global = (d_pre_g - d_post_g) / d_post_g
+
+        region_classification_metrics_path = os.path.join(
+            self._out_dir, 'classification_report_regions.json')
+        try:
+            with open(region_classification_metrics_path) as f:
+                region_c_reports = json.load(f)
+        except FileNotFoundError:
+            print("procedure specific metric not weighted according to local "
+                  "QDA performance. Test classifiers first!")
+            region_c_reports = None
+
+        metric_affected_regions = 0
+        affected_regions = procedures2attributes_dict[procedure]
+        for key in affected_regions:
+            z_region = self._manager.latent_regions[key]
+            z_pre_region = z_pre[:, z_region[0]:z_region[1]]
+            z_post_region = z_post[:, z_region[0]:z_region[1]]
+            d_pre_r = self._manager.mahalanobis_dist_to_qda_distribution(
+                z_pre_region, region=key)
+            d_post_r = self._manager.mahalanobis_dist_to_qda_distribution(
+                z_post_region, region=key)
+
+            if region_c_reports is not None:
+                w = region_c_reports[key]['accuracy']
+            else:
+                w = 1
+            metric_affected_regions += w * ((d_pre_r - d_post_r) / d_post_r)
+        metric_affected_regions /= len(affected_regions)
+
+        return {"pre_class": pre_class, "post_class": post_class,
+                "global_metric": metric_global,
+                "procedure_metric": metric_affected_regions}
+
+    def _project_pre_post_pair(self, z_pre, z_post, patient_id):
+        out_plots_dir = os.path.join(self._out_dir, 'pre_post_eval_plots')
+        if not os.path.isdir(out_plots_dir):
+            os.mkdir(out_plots_dir)
 
         fig_entire_z_name = os.path.join(self._out_dir,
                                          'lda_emb_distributions.pkl')
         with open(fig_entire_z_name, 'rb') as f:
             fig_entire_z = pickle.load(f)
 
-        z_pre_proj = self._manager.lda_project_latents_in_2d(
-            z_pre.detach().cpu().numpy())
-        z_post_proj = self._manager.lda_project_latents_in_2d(
-            z_post.detach().cpu().numpy())
+        z_pre_np = z_pre.detach().cpu().numpy()
+        z_post_np = z_post.detach().cpu().numpy()
+
+        z_pre_proj = self._manager.lda_project_latents_in_2d(z_pre_np)
+        z_post_proj = self._manager.lda_project_latents_in_2d(z_post_np)
 
         ax = fig_entire_z.gca()
         sns.scatterplot(x=z_pre_proj[:, 0], y=z_pre_proj[:, 1],
@@ -918,15 +984,14 @@ class Tester:
         sns.scatterplot(x=z_post_proj[:, 0], y=z_post_proj[:, 1],
                         ax=ax, c=['#a34D7a'])
         plot_2d_arrow(tail_coords=z_pre_proj, head_coords=z_post_proj, ax=ax)
-        fig_entire_z.savefig(post_path[:-4] + '_emb.svg')
+        fig_entire_z.savefig(
+            os.path.join(out_plots_dir, patient_id + "_emb.svg"))
 
         fig_regions_z_name = os.path.join(self._out_dir,
                                           'emb_all_train_dist.pkl')
         with open(fig_regions_z_name, 'rb') as f:
             fig_fgrid_regions_z = pickle.load(f)
 
-        z_pre_np = z_pre.detach().cpu().numpy()
-        z_post_np = z_post.detach().cpu().numpy()
         for key, z_region in self._manager.latent_regions.items():
             z_pre_region = z_pre_np[:, z_region[0]:z_region[1]]
             z_post_region = z_post_np[:, z_region[0]:z_region[1]]
@@ -942,7 +1007,8 @@ class Tester:
                 tail_coords=z_pre_embeddings, head_coords=z_post_embeddings,
                 ax=fig_fgrid_regions_z.axes_dict[colour2attribute_dict[key]],
                 scale=1)
-        fig_fgrid_regions_z.fig.savefig(post_path[:-4] + '_emb_r.svg')
+        fig_fgrid_regions_z.fig.savefig(
+            os.path.join(out_plots_dir, patient_id + "_emb_r.svg"))
 
     @staticmethod
     def vector_linspace(start, finish, steps):
@@ -1181,6 +1247,19 @@ class Tester:
                               os.path.join(self._out_dir, 'confmat_qda.svg'))
 
         self.confusion_matrices_per_region(ts_z_np, ts_ly)
+        region_reports = {}
+        for key, z_region in self._manager.latent_regions.items():
+            pred_r_qda = self._region_qdas[key].predict(
+                ts_z_np[:, z_region[0]:z_region[1]])
+            region_reports[key] = classification_report(
+                ts_ly, self._manager.idx2class(pred_r_qda), output_dict=True)
+            region_reports[key]["accuracy"] = self._region_qdas[key].score(
+                ts_z_np[:, z_region[0]:z_region[1]], ts_y)
+
+        outfile_path = os.path.join(self._out_dir,
+                                    'classification_report_regions.json')
+        with open(outfile_path, 'w') as outfile:
+            json.dump(region_reports, outfile)
 
     def confusion_matrices_per_region(self, ts_z_np, ts_ly):
         confusion_matrices_lda = {}
@@ -1224,7 +1303,7 @@ class Tester:
 if __name__ == '__main__':
     import argparse
     import utils
-    from data_generation_and_loading import get_data_loaders
+    from data_loading import get_data_loaders
     from model_manager import ModelManager
 
     parser = argparse.ArgumentParser()
@@ -1273,10 +1352,13 @@ if __name__ == '__main__':
     #     lr=0.01, iterations=200)
     # tester.plot_embeddings(embedding_mode='lda')
     # tester.test_classifiers()
-    tester.classify_and_project_pre_post_pair(
-        pre_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Missing_Apert_Mesh_out/A102_Pre_Op.ply",
-        post_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Apert/GOSH/642788_Post_Op.ply",
-    )
+    tester.evaluate_all_pre_post_pairs_in_excel(
+        pairs_root="/media/simo/DATASHURPRO/pre_post_fitted_meshes",
+        pairs_excel_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/pre_post.xlsx")
+    # tester.evaluate_pre_post_pair(
+    #     pre_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Missing_Apert_Mesh_out/A102_Pre_Op.ply",
+    #     post_path="/media/simo/DATASHURPRO/pre_post_fitted_meshes/Apert/GOSH/642788_Post_Op.ply",
+    # )
     # tester.interpolate_syndrome_to_normal(patient_fname='a_7.obj')
     # tester.interpolate_syndrome_to_normal(patient_fname='c_104.obj')
     # tester.interpolate_syndrome_to_normal(

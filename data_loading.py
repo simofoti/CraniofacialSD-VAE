@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import pickle
 import tqdm
 import trimesh
 import torch

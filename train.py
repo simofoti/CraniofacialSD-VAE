@@ -6,7 +6,7 @@ import torch.nn
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from data_generation_and_loading import get_data_loaders
+from data_loading import get_data_loaders
 from model_manager import ModelManager
 from test import Tester
 
