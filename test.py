@@ -23,6 +23,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.utils.multiclass import unique_labels
 from scipy.stats import multivariate_normal
 from scipy.linalg import eigh, orthogonal_procrustes
+from scipy.spatial.distance import mahalanobis, euclidean
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.colors import Normalize
 from matplotlib.cm import get_cmap
@@ -899,15 +900,68 @@ class Tester:
     def evaluate_all_pre_post_pairs_in_excel(self, pairs_root,
                                              pairs_excel_path):
         pairs_df = pd.read_excel(pairs_excel_path)
+        region_metrics_df = pd.DataFrame()
+        region_metrics_a_df = pd.DataFrame()
         for r_idx, row in pairs_df.iterrows():
             pid, procedure = str(row["PID"]), row["Surgery regions"]
             pre_path = os.path.join(pairs_root, row["Pre name"])
             post_path = os.path.join(pairs_root, row["Post name"])
             metrics = self.evaluate_pre_post_pair(pre_path, post_path,
                                                   pid, procedure)
+
+            # Remove region metrics from global metrics and combine them
+            # in a dataframe
+            region_metrics = metrics.pop("region_metrics", None)
+            # region_metrics_df.loc[r_idx, "PID"] = pid
+            region_metrics_df.loc[r_idx, "Procedure"] = row["Procedure"]
+            region_metrics_a_df.loc[r_idx, "Procedure"] = row["Procedure"]
+            region_metrics_a_df.loc[r_idx, "Syndrome"] = row["Syndrome"]
+            for k, m in region_metrics.items():
+                r_name = utils.colour2attribute_dict[k]
+                region_metrics_df.loc[r_idx, r_name] = m["metric_distances"]
+                region_metrics_a_df.loc[r_idx, r_name] = m["metric_with_angle"]
+
             for k, metric in metrics.items():
                 pairs_df.loc[r_idx, k] = metric
-        pairs_df.to_excel(pairs_excel_path[:-5] + "_with_results.xlsx")
+
+        out_path = os.path.join(self._out_dir, 'pre_post_eval_plots',
+                                os.path.split(pairs_excel_path)[1])
+        pairs_df.to_excel(out_path[:-5] + "_with_results.xlsx")
+
+        region_metrics_df.replace(np.nan, 0)
+        region_metrics_a_df.replace(np.nan, 0)
+
+        plt.close('all')
+        ax = sns.boxplot(data=pd.melt(region_metrics_df, id_vars="Procedure"),
+                         x="variable", y="value", hue="Procedure")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        ax.figure.savefig(os.path.join(self._out_dir, 'pre_post_eval_plots',
+                                       "region_metrics_distances.svg"))
+        # plt.close('all')
+        # sns.boxplot(data=pd.melt(region_metrics_a_df, id_vars="Procedure"),
+        #             x="variable", y="value", hue="Procedure")
+        # plt.savefig(os.path.join(self._out_dir, 'pre_post_eval_plots',
+        #                          "region_metrics_with_angles.svg"))
+
+        apert_df = region_metrics_a_df.loc[
+            region_metrics_a_df["Syndrome"] == "Apert"]
+        crouzon_df = region_metrics_a_df.loc[
+            region_metrics_a_df["Syndrome"] == "Crouzon"]
+        plt.close('all')
+        ax = sns.boxplot(data=pd.melt(apert_df.drop(columns="Syndrome"),
+                                     id_vars="Procedure"),
+                         x="variable", y="value", hue="Procedure")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        ax.figure.savefig(os.path.join(self._out_dir, 'pre_post_eval_plots',
+                                       "region_metrics_with_angles_apert.svg"))
+        plt.close('all')
+        ax = sns.boxplot(data=pd.melt(crouzon_df.drop(columns="Syndrome"),
+                                      id_vars="Procedure"),
+                         x="variable", y="value", hue="Procedure")
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=30)
+        ax.figure.savefig(
+            os.path.join(self._out_dir, 'pre_post_eval_plots',
+                         "region_metrics_with_angles_crouzon.svg"))
 
     def evaluate_pre_post_pair(self, pre_path, post_path,
                                patient_id, procedure='monobloc'):
@@ -923,13 +977,44 @@ class Tester:
             z_pre.detach().cpu().numpy())
         post_posteriors = self._manager.qda.predict_proba(
             z_post.detach().cpu().numpy())
-        print(f"pre_posteriors: {pre_posteriors}, "
-              f"post_posteriors: {post_posteriors}")
+        print(f"patient {patient_id} -> "
+              f"pre_posteriors: {pre_class}, "
+              f"{np.around(pre_posteriors, decimals=2)}, "
+              f"post_posteriors: {post_class},"
+              f"{np.around(post_posteriors, decimals=2)}")
 
+        # Compute a surgical effectiveness metric on the whole latents
+        # using mahalanobis distances
         d_pre_g = self._manager.mahalanobis_dist_to_qda_distribution(z_pre)
         d_post_g = self._manager.mahalanobis_dist_to_qda_distribution(z_post)
         metric_global = (d_pre_g - d_post_g) / d_post_g
 
+        # Compute a surgical effectiveness metric on the whole latents
+        # using L2 distances
+        z_pre_np = z_pre.detach().cpu().numpy()
+        z_post_np = z_post.detach().cpu().numpy()
+        mean_h = self._manager.qda.means_[self._manager.class2idx('n')]
+        d_pre_g_l2 = euclidean(z_pre_np, mean_h)
+        d_post_g_l2 = euclidean(z_post_np, mean_h)
+        metric_global_l2 = (d_pre_g_l2 - d_post_g_l2) / d_post_g_l2
+
+        # Compute a surgical effectiveness metric on the whole latents based
+        # on length and direction of the displacement
+        z_displacement = np.squeeze(z_post_np - z_pre_np)
+        ideal_traj = np.squeeze(mean_h - z_pre_np)
+        z_displ_direction = z_displacement / np.linalg.norm(z_displacement)
+        ideal_traj_direction = ideal_traj / np.linalg.norm(ideal_traj)
+        cos_direction_angle = np.dot(z_displ_direction, ideal_traj_direction)
+        cov_h = self._manager.qda.covariance_[self._manager.class2idx('n')]
+        length_displ_maha = mahalanobis(z_post_np, z_pre_np,
+                                        np.linalg.inv(cov_h))
+        metric_global_dir = length_displ_maha * cos_direction_angle / d_post_g
+
+        # Compute a surgical effectiveness metric on the latent subsets affected
+        # by the surgical procedure using mahalanobis distances and scaling
+        # their contribution according to the accuracy of the classification
+        # on each subset (the higher the local accuracy, the more reliable the
+        # distances in the given region)
         region_classification_metrics_path = os.path.join(
             self._out_dir, 'classification_report_regions.json')
         try:
@@ -958,9 +1043,43 @@ class Tester:
             metric_affected_regions += w * ((d_pre_r - d_post_r) / d_post_r)
         metric_affected_regions /= len(affected_regions)
 
+        # Compute region-specific surgical effectiveness metrics on the
+        # latent subsets affected by the surgical procedure
+        # using mahalanobis distances on length and considering direction
+        # of the displacement
+        region_metrics = {}
+        for key in affected_regions:
+            z_region = self._manager.latent_regions[key]
+            z_pre_region = z_pre_np[:, z_region[0]:z_region[1]]
+            z_post_region = z_post_np[:, z_region[0]:z_region[1]]
+            m_h_region = self._region_qdas[key].means_[
+                self._manager.class2idx('n')]
+            cov_h_region = self._region_qdas[key].covariance_[
+                self._manager.class2idx('n')]
+            inv_covariance = np.linalg.inv(cov_h_region)
+
+            d_pre_r = mahalanobis(z_pre_region, m_h_region, inv_covariance)
+            d_post_r = mahalanobis(z_post_region, m_h_region, inv_covariance)
+            metric_r1 = (d_pre_r - d_post_r) / d_post_r
+
+            z_displacement = np.squeeze(z_post_region - z_pre_region)
+            ideal_traj = np.squeeze(m_h_region - z_pre_region)
+            z_displ_direction = z_displacement / np.linalg.norm(z_displacement)
+            ideal_traj_direction = ideal_traj / np.linalg.norm(ideal_traj)
+            cos_direction_angle = np.dot(z_displ_direction,
+                                         ideal_traj_direction)
+            length_displ_maha = mahalanobis(z_post_region, z_pre_region,
+                                            inv_covariance)
+            metric_r2 = length_displ_maha * cos_direction_angle / d_post_r
+            region_metrics[key] = {"metric_distances": metric_r1,
+                                   "metric_with_angle": metric_r2}
+
         return {"pre_class": pre_class, "post_class": post_class,
                 "global_metric": metric_global,
-                "procedure_metric": metric_affected_regions}
+                "global_metric_l2": metric_global_l2,
+                "global_metric_directional": metric_global_dir,
+                "procedure_metric": metric_affected_regions,
+                "region_metrics": region_metrics}
 
     def _project_pre_post_pair(self, z_pre, z_post, patient_id):
         out_plots_dir = os.path.join(self._out_dir, 'pre_post_eval_plots')
