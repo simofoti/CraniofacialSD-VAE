@@ -649,9 +649,15 @@ class Tester:
         z_p = self._manager.encode(v_p.unsqueeze(0).to(self._device))
         return z_p
 
-    def interpolate_syndrome_to_normal(self, patient_fname):
-        z_p = self._load_and_encode(patient_fname)
-        if 'augmented/' in patient_fname:
+    def interpolate_syndrome_to_normal(self, patient_fname=None,
+                                       patient_path=None):
+        assert patient_fname is not None or patient_path is not None
+
+        z_p = self._load_and_encode(patient_fname, patient_path)
+
+        if patient_fname is None:
+            patient_fname = os.path.split(patient_path)[1]
+        elif 'augmented/' in patient_fname:
             patient_fname = patient_fname[len('augmented/'):]
 
         # Find normal patients latent vectors
@@ -1128,6 +1134,21 @@ class Tester:
                 scale=1)
         fig_fgrid_regions_z.fig.savefig(
             os.path.join(out_plots_dir, patient_id + "_emb_r.svg"))
+
+    def compute_and_save_postop_mesh_colourmap(self, pre_path, post_path):
+        pre_mesh = trimesh.load_mesh(pre_path, process=False)
+        pre_verts = torch.tensor(pre_mesh.vertices, dtype=torch.float,
+                                 requires_grad=False, device='cpu')
+        post_mesh = trimesh.load_mesh(post_path, process=False)
+        post_verts = torch.tensor(post_mesh.vertices, dtype=torch.float,
+                                  requires_grad=False, device='cpu')
+
+        dist = self._manager.compute_vertex_errors(post_verts, pre_verts)
+        colours = utils.errors_to_colors(
+            dist.unsqueeze(0), min_value=0, max_value=10, cmap='plasma') / 255
+
+        post_mesh.visual.vertex_colors = colours.squeeze().detach().numpy()
+        post_mesh.export(post_path[:-4] + "_colmap.ply")
 
     @staticmethod
     def vector_linspace(start, finish, steps):
