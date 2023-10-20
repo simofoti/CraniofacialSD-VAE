@@ -1,50 +1,13 @@
 
 .idea/
 
-UHM_models
-
 __pycache__/
 
 experiments/
 
 outputs/
 
-vertices_of_faces_from_UHM
-
 precomputed/
-
-precomputed_faces/
-
-vertices_of_bodies_from_STAR/
-
-meshes2fit/
-
-precomputed_bodies/
-
-precomputed_cvpr/
-
-precomputed_craniofacial/
-
-precomputed_facial/
-
-precomputed_coma/
-
-precomputed_lyhm/
-
-demo_files/
 
 .ipynb_checkpoints/
 
-demo_tog/
-
-demo_files_tog_sd/
-
-precomputed_sd/
-
-registration/
-
-precomputed_craniofacial_new/
-
-demo_files_media/
-
-precomputed_craniofacial_bws/

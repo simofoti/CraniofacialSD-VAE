@@ -1,0 +1,65 @@
+data:
+  template_path: demo_files/template.ply                                        # vertices should be coloured (vertex semantic segmentation)
+  dataset_summary_path: none
+  precomputed_path: demo_files
+  data_type: heads                                                              # {heads, faces}
+  stratified_split: True
+  dataset_path: demo_files/meshes
+  augmentation_mode: spectral_interp                                            # {interpolate, spectral_interp, spectral_comb}
+  augmentation_factor: 5
+  augmentation_balanced: True                                                   # if True, total meshes are the same across classes. If False, meshes of each class are augmented by augmentation_factor
+  normalize_data: True
+  to_mm_constant: 89.11                                                         # if already in mm set to 1, otherwise set proper multiplicative constant
+  number_of_workers: 8
+  swap_features: True                                                           # if True, the resulting batch size will be batch_size^2
+
+optimization:
+  epochs: 600
+  batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
+  lr: 1e-4
+  weight_decay: 0
+
+  laplacian_weight: 0.1
+  kl_weight: 1e-4                                                               # if 0, AE or RAE architecture is used
+
+  latent_consistency_weight: 0.5                                                # if 0, no latent consistency loss is used
+  latent_consistency_eta1: 0.5
+  latent_consistency_eta2: 0.5
+
+  rae_weight: 0                                                                 # if 0, no Regularized AE (RAE). If > 0 kl, dip, and factor weights must be 0
+  rae_embedding: 1e-4
+  rae_grad_penalty: 0.5e-7                                                      # If 0, L2 normalization is used and must set rae_gen_weight_decay. Default for GP: 0.5e-7
+  rae_gen_weight_decay: 1e-7                                                    # Ignored if rae_grad_penalty > 0
+  rae_n_gaussians: 10
+  rae_gmm_mean_initialization: True                                             # if True, rae_n_gaussians automatically set to number of classed
+
+  dip_weight: 0                                                                 # if 0, no dip loss is used
+  dip_type: i
+  dip_diag_lambda: 0.05
+  dip_offdiag_lambda: 0.1
+
+  factor_weight: 0                                                              # if 0, no factor VAE
+
+model:
+  sampling:
+    type: basic                                                                 # {basic, r_weighted}. Delete precomputed file if changed
+    sampling_factors: [4, 4, 4, 4]
+  spirals:
+    length: [9, 9, 9, 9]                                                        # length of spiral for each convolution. Delete precomputed file if changed.
+    dilation: [1, 1, 1, 1]                                                      # spiral dilation for each convolution. Delete precomputed file if changed.
+  in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
+  out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
+  latent_size: 75                                                               # size of the latent vector
+  pre_z_sigmoid: False
+
+classifier:
+  main_model_type: qda                                                          # {mlp, svm, lda, qda, none}
+  mlp_training_type: after                                                      # {end2end, after}
+  mlp_hidden_features: [512, 128, 64]
+  mlp_lr: 1e-4
+  mlp_loss_weight: 1                                                            # only if training_type is end2end
+  mlp_epochs: 50                                                                # only if training_type is after
+
+logging_frequency:
+  tb_renderings: 50
+  save_weights: 100
